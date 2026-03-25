@@ -13,6 +13,7 @@
 *.vcf
 *.vcf.gz
 *.rds
-input/
+input/*
+!input/high_LD_regions.tsv
 output/
 tmp/
