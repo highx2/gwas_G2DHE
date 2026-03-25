@@ -1,0 +1,842 @@
+####Extraction_of_hematological_data
+##R
+library(tidyverse)
+library(data.table)
+
+PROJECT_DIR <- 'path/to/project/directory'
+
+#Target_test_names: Baso_percent, Eosi_percent, Neut_percent, WBC, RBC, Hemoglobin, Hematocrit
+tTest <- "Baso_percent"
+code <- 'Test_code_for_the_examination_of_interest'
+
+tibble(path=list.files(path="'path/to/cohort/data/repository'/20220604",full.names=T)) %>% 
+  filter(str_detect(path,pattern=".*utf8\\.csv$")) %>% 
+  rowwise() %>% 
+  mutate(colN=list(fread(file=path,nrows=0,header=T) %>% colnames())) %>% 
+  filter(code %in% colN) %>% 
+  mutate(data=list(fread(file=path,header=T) %>% as_tibble() %>% select(TMMID=1,Date=3,code) %>% rename(Val=3))) %>% 
+  select(data) %>% unnest(cols=c(data)) %>% 
+  filter(str_detect(TMMID,pattern="^tmm[0-9]*")) %>% 
+  filter(!(str_detect(Val,pattern="^\\.$"))) %>% 
+  mutate(Val=as.numeric(Val)) %>% 
+  mutate(Date=lubridate::ymd(Date)) %>% arrange(Date) %>% distinct(TMMID,.keep_all=T) %>% 
+  inner_join(read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% 
+               mutate(Sex=case_when(Sex=="男性"~1,Sex=="女性"~0,TRUE~-9),Birth=Birth %>% lubridate::ym()),by="TMMID") %>% 
+  mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1))) %>% 
+  select(TMMID,Date,Age,Sex,Val) %>% 
+  write_rds(file=str_c(PROJECT_DIR,"/input/",tTest,".rds"),compress="gz")
+
+read_rds(file=str_c(PROJECT_DIR,"/input/",tTest,".rds"))
+
+tDifCount <- "Baso"
+# tDifCount <- "Eosi"
+# tDifCount <- "Neut"
+
+read_rds(file=str_c(PROJECT_DIR,"/input/WBC.rds")) %>% 
+  mutate(Date = lubridate::ymd(Date)) %>% 
+  mutate(Val = as.numeric(Val)) %>% 
+  select(TMMID, Date, Val) %>% 
+  inner_join(
+    read_rds(file=str_c(PROJECT_DIR,"/input/",tDifCount,"_percent.rds")) %>% 
+      select(TMMID, Date, ratio = Val) %>% 
+      mutate(ratio = ratio / 100)
+  ) %>% 
+  mutate(Val = Val * ratio) %>% 
+  select(-ratio) %>% 
+  read_rds(file=str_c(PROJECT_DIR,"/input/",tDifCount,".rds"))
+
+####Create_genotype_data_of_rs6782812
+tibble(SNV="3:128317997_G_A") %>% write_tsv(str_c(PROJECT_DIR,"/input/topSNV.tsv"),col_names=F)
+
+##bash
+export PROJECT_DIR='path/to/project/directory'
+
+plink2 --bfile ${PROJECT_DIR}/input/QC_2 \
+--extract ${PROJECT_DIR}/input/topSNV.tsv \
+--export A \
+--out ${PROJECT_DIR}/tmp/topSNV_2
+
+plink2 --bfile ${PROJECT_DIR}/input/QC_3 \
+--extract ${PROJECT_DIR}/input/topSNV.tsv \
+--export A \
+--out ${PROJECT_DIR}/tmp/topSNV_3
+
+####Creation_of_summary_plots_of_blood_counts_by_age_group,_sex,_and_rs6782812_genotype
+##R
+#Basophiles
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_2.raw")) %>% as_tibble(),
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_3.raw")) %>% as_tibble()) %>% select(IID,Geno=7) %>% mutate(Geno=2-Geno) %>% 
+  left_join(
+    bind_rows('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),
+    'path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% distinct(TMMID,.keep_all=T)
+,by=c("IID"="igid")) %>% left_join(
+  read_rds(str_c(PROJECT_DIR,"/input/Baso.rds")) %>% arrange(Date) %>% distinct(TMMID,.keep_all=T)
+  ,by="TMMID") %>% left_join(
+    read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% mutate(Birth=lubridate::ym(Birth))
+    ,by="TMMID") %>% mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1)) %>% trunc()) %>% 
+  mutate(Sex=if_else(Sex=="女性","female","male") %>% as_factor()) %>% select(Geno,Age,Sex,Val) -> dtBaso
+
+read_rds(str_c(PROJECT_DIR,"/input/Baso.rds")) %>% arrange(Date) %>% distinct(TMMID,.keep_all=T)
+
+dtBaso %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Val = Val / 100) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  group_by(Sex,Age,Geno) %>% 
+  summarise(mean = mean(Val), sd = sd(Val), q25 = quantile(Val, probs = 0.25), median = median(Val), q75 = quantile(Val, probs = 0.75)) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Val_Baso.csv"))
+
+dtBaso %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Val = Val / 100) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  ggplot(aes(x=Age,y=Val,fill=rs6782812)) + 
+  geom_boxplot(color="black",alpha=0.6,outlier.shape = NA) + 
+  scale_fill_manual(values=c("navy","blue","royalblue")) + 
+  scale_y_continuous(expand = c(0,0),limits = c(-0.02,1.1)) + 
+  facet_wrap(~ Sex) + 
+  labs(y=expression(paste("Cell number (x",10^2,"/",mu,"L)"))) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text.x=element_text(angle=-30,hjust=-0.1,size=14),axis.text.y=element_text(size=16),
+        legend.title=element_text(size = 16),legend.text=element_text(size=14),
+        legend.box.background=element_rect(fill=NA,color="black"))
+ggsave(str_c(PROJECT_DIR,"/output/figs/Baso_Age_Geno_box.png"),width=26,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Baso_Age_Geno_box.pdf"),device=cairo_pdf,width=26,height=22,units="cm")
+
+dtStat <- dtBaso %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(Geno=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>% 
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100")
+
+dtAA_AG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_AG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAG_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AG_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAA_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+bind_rows(dtAA_AG, dtAG_GG, dtAA_GG) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Geno_Baso.csv"))
+
+dtStat %>% distinct(Age,Geno) %>% select(tAge=Age,tGeno=Geno) %>% arrange(tAge,tGeno) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "female") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "male") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "female_vs_male") %>% rename(Age=tAge, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Sex_Baso.csv"))
+
+dtStat %>% distinct(Geno,Sex,Age) %>% select(tGeno=Geno,tSex=Sex,tAge=Age) %>% arrange(tGeno,tSex,tAge) %>% 
+  rowwise() %>% filter(tAge != "20-30") %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == "20-30" & Sex == tSex & Geno == tGeno) %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == tGeno) %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "20-30_vs_Age") %>% rename(Age=tAge, Sex=tSex, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Age_Baso.csv"))
+
+dtStat %>% group_by(Sex,Age,Geno) %>% 
+  summarise(n = n(), mean = mean(Val), sd = sd(Val), mid = median(Val), Q25 = quantile(Val)[2], Q75 = quantile(Val)[4]) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Stats_Baso.csv"))
+
+#Eosinophiles
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_2.raw")) %>% as_tibble(),
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_3.raw")) %>% as_tibble()) %>% select(IID,Geno=7) %>% mutate(Geno=2-Geno) %>% 
+  left_join(
+    bind_rows('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),
+    'path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% distinct(TMMID,.keep_all=T)
+,by=c("IID"="igid")) %>% left_join(
+  read_rds(str_c(PROJECT_DIR,"/input/Eosi.rds")) %>% arrange(Date) %>% distinct(TMMID,.keep_all=T)
+  ,by="TMMID") %>% left_join(
+    read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% mutate(Birth=lubridate::ym(Birth))
+    ,by="TMMID") %>% mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1)) %>% trunc()) %>% 
+  mutate(Sex=if_else(Sex=="女性","female","male") %>% as_factor()) %>% select(Geno,Age,Sex,Val) -> dtEosi
+
+dtEosi %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Val = Val / 100) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  group_by(Sex,Age,Geno) %>% 
+  summarise(mean = mean(Val), sd = sd(Val), q25 = quantile(Val, probs = 0.25), median = median(Val), q75 = quantile(Val, probs = 0.75)) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Val_Eosi.csv"))
+
+dtEosi %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Val = Val / 100) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  ggplot(aes(x=Age,y=Val,fill=rs6782812)) + 
+  geom_boxplot(color="black",alpha=0.6,outlier.shape = NA) + 
+  scale_fill_manual(values=c("red4","red","tomato")) + 
+  scale_y_continuous(expand = c(0,0),limits = c(-0.2,6.5)) + 
+  facet_wrap(~ Sex) + 
+  labs(y=expression(paste("Cell number (x",10^2,"/",mu,"L)"))) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text.x=element_text(angle=-30,hjust=-0.1,size=14),axis.text.y=element_text(size=16),
+        legend.title=element_text(size = 16),legend.text=element_text(size=14),
+        legend.box.background=element_rect(fill=NA,color="black"))
+ggsave(str_c(PROJECT_DIR,"/output/figs/Eosi_Age_Geno_box.png"),width=26,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Eosi_Age_Geno_box.pdf"),device=cairo_pdf,width=26,height=22,units="cm")
+
+dtStat <- dtEosi %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(Geno=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>% 
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100")
+
+dtAA_AG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_AG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAG_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AG_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAA_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+bind_rows(dtAA_AG, dtAG_GG, dtAA_GG) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Geno_Eosi.csv"))
+
+dtStat %>% distinct(Age,Geno) %>% select(tAge=Age,tGeno=Geno) %>% arrange(tAge,tGeno) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "female") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "male") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "female_vs_male") %>% rename(Age=tAge, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Sex_Eosi.csv"))
+
+dtStat %>% distinct(Geno,Sex,Age) %>% select(tGeno=Geno,tSex=Sex,tAge=Age) %>% arrange(tGeno,tSex,tAge) %>% 
+  rowwise() %>% filter(tAge != "20-30") %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == "20-30" & Sex == tSex & Geno == tGeno) %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == tGeno) %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "20-30_vs_Age") %>% rename(Age=tAge, Sex=tSex, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Age_Eosi.csv"))
+
+dtStat %>% group_by(Sex,Age,Geno) %>% 
+  summarise(n = n(), mean = mean(Val), sd = sd(Val), mid = median(Val), Q25 = quantile(Val)[2], Q75 = quantile(Val)[4]) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Stats_Eosi.csv"))
+
+#Neutrophiles
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_2.raw")) %>% as_tibble(),
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_3.raw")) %>% as_tibble()) %>% select(IID,Geno=7) %>% mutate(Geno=2-Geno) %>% 
+  left_join(
+    bind_rows('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),
+    'path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% distinct(TMMID,.keep_all=T)
+,by=c("IID"="igid")) %>% left_join(
+  read_rds(str_c(PROJECT_DIR,"/input/Neut.rds")) %>% arrange(Date) %>% distinct(TMMID,.keep_all=T)
+  ,by="TMMID") %>% left_join(
+    read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% mutate(Birth=lubridate::ym(Birth))
+    ,by="TMMID") %>% mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1)) %>% trunc()) %>% 
+  mutate(Sex=if_else(Sex=="女性","female","male") %>% as_factor()) %>% select(Geno,Age,Sex,Val) -> dtNeut
+
+dtNeut %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Val = Val / 100) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  group_by(Sex,Age,Geno) %>% 
+  summarise(mean = mean(Val), sd = sd(Val), q25 = quantile(Val, probs = 0.25), median = median(Val), q75 = quantile(Val, probs = 0.75)) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Val_Neut.csv"))
+
+dtNeut %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Val = Val / 100) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  ggplot(aes(x=Age,y=Val,fill=rs6782812)) + 
+  geom_boxplot(color="black",outlier.shape = NA) + 
+  scale_fill_manual(values=c("skyblue3","skyblue","slategray1")) + 
+  scale_y_continuous(expand = c(0,0),limits = c(0,75)) + 
+  facet_wrap(~ Sex) + 
+  labs(y=expression(paste("Cell number (x",10^2,"/",mu,"L)"))) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text.x=element_text(angle=-30,hjust=-0.1,size=14),axis.text.y=element_text(size=16),
+        legend.title=element_text(size = 16),legend.text=element_text(size=14),
+        legend.box.background=element_rect(fill=NA,color="black"))
+ggsave(str_c(PROJECT_DIR,"/output/figs/Neut_Age_Geno_box.png"),width=26,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Neut_Age_Geno_box.pdf"),device=cairo_pdf,width=26,height=22,units="cm")
+
+dtStat <- dtNeut %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(Geno=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>% 
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100")
+
+dtAA_AG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_AG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAG_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AG_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAA_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+bind_rows(dtAA_AG, dtAG_GG, dtAA_GG) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Geno_Neut.csv"))
+
+dtStat %>% distinct(Age,Geno) %>% select(tAge=Age,tGeno=Geno) %>% arrange(tAge,tGeno) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "female") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "male") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "female_vs_male") %>% rename(Age=tAge, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Sex_Neut.csv"))
+
+dtStat %>% distinct(Geno,Sex,Age) %>% select(tGeno=Geno,tSex=Sex,tAge=Age) %>% arrange(tGeno,tSex,tAge) %>% 
+  rowwise() %>% filter(tAge != "20-30") %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == "20-30" & Sex == tSex & Geno == tGeno) %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == tGeno) %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "20-30_vs_Age") %>% rename(Age=tAge, Sex=tSex, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Age_Neut.csv"))
+
+dtStat %>% group_by(Sex,Age,Geno) %>% 
+  summarise(n = n(), mean = mean(Val), sd = sd(Val), mid = median(Val), Q25 = quantile(Val)[2], Q75 = quantile(Val)[4]) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Stats_Neut.csv"))
+
+#RBCs
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_2.raw")) %>% as_tibble(),
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_3.raw")) %>% as_tibble()) %>% select(IID,Geno=7) %>% mutate(Geno=2-Geno) %>% 
+  left_join(
+    bind_rows('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),
+    'path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% distinct(TMMID,.keep_all=T)
+,by=c("IID"="igid")) %>% left_join(
+  read_rds(str_c(PROJECT_DIR,"/input/RBC.rds")) %>% arrange(Date) %>% distinct(TMMID,.keep_all=T)
+  ,by="TMMID") %>% mutate(Sex=if_else(Sex==0,"female","male") %>% as_factor()) %>% select(Geno,Age,Sex,Val) -> dtRBC
+
+dtRBC %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  group_by(Sex,Age,Geno) %>% 
+  summarise(mean = mean(Val), sd = sd(Val), q25 = quantile(Val, probs = 0.25), median = median(Val), q75 = quantile(Val, probs = 0.75)) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Val_RBC.csv"))
+
+dtRBC %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  ggplot(aes(x=Age,y=Val,fill=rs6782812)) + 
+  geom_boxplot(color="black",outlier.shape = NA) + 
+  scale_fill_manual(values=c("hotpink3","hotpink","lightpink")) + 
+  scale_y_continuous(expand = c(0,0),limits = c(300,600)) + 
+  facet_wrap(~ Sex) + 
+  labs(y=expression(paste("RBC (x",10^6,"/",mu,"L)"))) +
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text.x=element_text(angle=-30,hjust=-0.1,size=14),axis.text.y=element_text(size=16),
+        legend.title=element_text(size = 16),legend.text=element_text(size=14),
+        legend.box.background=element_rect(fill=NA,color="black"))
+ggsave(str_c(PROJECT_DIR,"/output/figs/RBC_Age_Geno_box.png"),width=26,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/RBC_Age_Geno_box.pdf"),device=cairo_pdf,width=26,height=22,units="cm")
+
+dtStat <- dtRBC %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(Geno=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>% 
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100")
+
+dtAA_AG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_AG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAG_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AG_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAA_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+bind_rows(dtAA_AG, dtAG_GG, dtAA_GG) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Geno_RBC.csv"))
+
+dtStat %>% distinct(Age,Geno) %>% select(tAge=Age,tGeno=Geno) %>% arrange(tAge,tGeno) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "female") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "male") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "female_vs_male") %>% rename(Age=tAge, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Sex_RBC.csv"))
+
+dtStat %>% distinct(Geno,Sex,Age) %>% select(tGeno=Geno,tSex=Sex,tAge=Age) %>% arrange(tGeno,tSex,tAge) %>% 
+  rowwise() %>% filter(tAge != "20-30") %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == "20-30" & Sex == tSex & Geno == tGeno) %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == tGeno) %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "20-30_vs_Age") %>% rename(Age=tAge, Sex=tSex, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Age_RBC.csv"))
+
+dtStat %>% group_by(Sex,Age,Geno) %>% 
+  summarise(n = n(), mean = mean(Val), sd = sd(Val), mid = median(Val), Q25 = quantile(Val)[2], Q75 = quantile(Val)[4]) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Stats_RBC.csv"))
+
+#Hemoglobin
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_2.raw")) %>% as_tibble(),
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_3.raw")) %>% as_tibble()) %>% select(IID,Geno=7) %>% mutate(Geno=2-Geno) %>% 
+  left_join(
+    bind_rows('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),
+    'path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% distinct(TMMID,.keep_all=T)
+,by=c("IID"="igid")) %>% left_join(
+  read_rds(str_c(PROJECT_DIR,"/input/Hb.rds")) %>% arrange(Date) %>% distinct(TMMID,.keep_all=T)
+  ,by="TMMID") %>% mutate(Sex=if_else(Sex==0,"female","male") %>% as_factor()) %>% select(Geno,Age,Sex,Val) -> dtHb
+
+dtHb %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  group_by(Sex,Age,Geno) %>% 
+  summarise(mean = mean(Val), sd = sd(Val), q25 = quantile(Val, probs = 0.25), median = median(Val), q75 = quantile(Val, probs = 0.75)) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Val_Hb.csv"))
+
+dtHb %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  ggplot(aes(x=Age,y=Val,fill=rs6782812)) + 
+  geom_boxplot(color="black",outlier.shape = NA) + 
+  scale_fill_manual(values=c("hotpink3","hotpink","lightpink")) + 
+  scale_y_continuous(expand = c(0,0),limits = c(5,20)) + 
+  facet_wrap(~ Sex) + 
+  labs(y="Hemoglobin (g/dL)") +
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text.x=element_text(angle=-30,hjust=-0.1,size=14),axis.text.y=element_text(size=16),
+        legend.title=element_text(size = 16),legend.text=element_text(size=14),
+        legend.box.background=element_rect(fill=NA,color="black"))
+ggsave(str_c(PROJECT_DIR,"/output/figs/Hb_Age_Geno_box.png"),width=26,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Hb_Age_Geno_box.pdf"),device=cairo_pdf,width=26,height=22,units="cm")
+
+dtStat <- dtHb %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(Geno=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>% 
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100")
+
+dtAA_AG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_AG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAG_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AG_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAA_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+bind_rows(dtAA_AG, dtAG_GG, dtAA_GG) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Geno_Hb.csv"))
+
+dtStat %>% distinct(Age,Geno) %>% select(tAge=Age,tGeno=Geno) %>% arrange(tAge,tGeno) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "female") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "male") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "female_vs_male") %>% rename(Age=tAge, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Sex_Hb.csv"))
+
+dtStat %>% distinct(Geno,Sex,Age) %>% select(tGeno=Geno,tSex=Sex,tAge=Age) %>% arrange(tGeno,tSex,tAge) %>% 
+  rowwise() %>% filter(tAge != "20-30") %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == "20-30" & Sex == tSex & Geno == tGeno) %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == tGeno) %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "20-30_vs_Age") %>% rename(Age=tAge, Sex=tSex, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Age_Hb.csv"))
+
+dtStat %>% group_by(Sex,Age,Geno) %>% 
+  summarise(n = n(), mean = mean(Val), sd = sd(Val), mid = median(Val), Q25 = quantile(Val)[2], Q75 = quantile(Val)[4]) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Stats_Hb.csv"))
+
+#Hematocrit
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_2.raw")) %>% as_tibble(),
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_3.raw")) %>% as_tibble()) %>% select(IID,Geno=7) %>% mutate(Geno=2-Geno) %>% 
+  left_join(
+    bind_rows('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),
+    'path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% distinct(TMMID,.keep_all=T)
+,by=c("IID"="igid")) %>% left_join(
+  read_rds(str_c(PROJECT_DIR,"/input/Hct.rds")) %>% arrange(Date) %>% distinct(TMMID,.keep_all=T)
+  ,by="TMMID") %>% mutate(Sex=if_else(Sex==0,"female","male") %>% as_factor()) %>% select(Geno,Age,Sex,Val) -> dtHct
+
+dtHct %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  group_by(Sex,Age,Geno) %>% 
+  summarise(mean = mean(Val), sd = sd(Val), q25 = quantile(Val, probs = 0.25), median = median(Val), q75 = quantile(Val, probs = 0.75)) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Val_Hct.csv"))
+
+dtHct %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(rs6782812=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>%
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100") %>% 
+  ggplot(aes(x=Age,y=Val,fill=rs6782812)) + 
+  geom_boxplot(color="black",outlier.shape = NA) + 
+  scale_fill_manual(values=c("hotpink3","hotpink","lightpink")) + 
+  scale_y_continuous(expand = c(0,0),limits = c(25,55)) + 
+  facet_wrap(~ Sex) + 
+  labs(y="Hematocrit (%)") +
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text.x=element_text(angle=-30,hjust=-0.1,size=14),axis.text.y=element_text(size=16),
+        legend.title=element_text(size = 16),legend.text=element_text(size=14),
+        legend.box.background=element_rect(fill=NA,color="black"))
+ggsave(str_c(PROJECT_DIR,"/output/figs/Hct_Age_Geno_box.png"),width=26,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Hct_Age_Geno_box.pdf"),device=cairo_pdf,width=26,height=22,units="cm")
+
+dtStat <- dtHct %>% rename(year=Age) %>% drop_na(Geno) %>% 
+  mutate(Age=case_when(year>=0&year<10~"0-10",year>=10&year<20~"10-20",year>=20&year<30~"20-30",year>=30&year<40~"30-40",
+                       year>=40&year<50~"40-50",year>=50&year<60~"50-60",year>=60&year<70~"60-70",year>=70&year<80~"70-80",
+                       year>=80&year<90~"80-90",year>=90&year<100~"90-100",TRUE~"others")) %>% 
+  mutate(Geno=case_when(Geno==2~"G/G",Geno==1~"A/G",TRUE~"A/A")) %>% 
+  mutate(Geno=as_factor(Geno)) %>% 
+  mutate(Age=factor(Age,levels=c("0-10","10-20","20-30","30-40","40-50","50-60","60-70","70-80","80-90","90-100","others"))) %>% 
+  filter(Age!="others" & Age!="10-20" & Age!="80-90" & Age!="90-100")
+
+dtAA_AG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_AG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAG_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/G") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AG_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+dtAA_GG <- dtStat %>% distinct(Age,Sex) %>% select(tAge=Age,tSex=Sex) %>% arrange(tAge,tSex) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "A/A") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == "G/G") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "AA_vs_GG") %>% rename(Age=tAge, Sex=tSex)
+
+bind_rows(dtAA_AG, dtAG_GG, dtAA_GG) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Geno_Hct.csv"))
+
+dtStat %>% distinct(Age,Geno) %>% select(tAge=Age,tGeno=Geno) %>% arrange(tAge,tGeno) %>% rowwise() %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "female") %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Geno == tGeno & Sex == "male") %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "female_vs_male") %>% rename(Age=tAge, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Sex_Hct.csv"))
+
+dtStat %>% distinct(Geno,Sex,Age) %>% select(tGeno=Geno,tSex=Sex,tAge=Age) %>% arrange(tGeno,tSex,tAge) %>% 
+  rowwise() %>% filter(tAge != "20-30") %>% 
+  mutate(pval=wilcox.test(
+    dtStat %>% filter(Age == "20-30" & Sex == tSex & Geno == tGeno) %>% pluck("Val"),
+    dtStat %>% filter(Age == tAge & Sex == tSex & Geno == tGeno) %>% pluck("Val"),paired = F)$p.value) %>% 
+  mutate(type = "20-30_vs_Age") %>% rename(Age=tAge, Sex=tSex, Geno=tGeno) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Pval_Age_Hct.csv"))
+
+dtStat %>% group_by(Sex,Age,Geno) %>% 
+  summarise(n = n(), mean = mean(Val), sd = sd(Val), mid = median(Val), Q25 = quantile(Val)[2], Q75 = quantile(Val)[4]) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/Stats_Hct.csv"))
+
+####Longitudinal_variation_in_basophil_and_eosinophil_counts_in_the_same_individuals
+#Baso
+read_rds(str_c(PROJECT_DIR,"/input/Baso.rds"))%>% 
+  filter(Date >= as.Date("2013-07-01") & Date <= as.Date("2021-03-31")) %>% #baseline & secondary
+  group_by(TMMID) %>% summarise(n=n()) %>% 
+  filter(n >= 2) %>% pluck("TMMID") ->  multiID
+
+read_rds(str_c(PROJECT_DIR,"/input/Baso.rds")) %>% 
+  filter(TMMID %in% multiID) %>% 
+  filter(Date >= as.Date("2013-07-01") & Date <= as.Date("2017-03-31")) %>% #baseline
+  arrange(Date) %>% 
+  distinct(TMMID, .keep_all = T) -> Baso1
+
+read_rds(str_c(PROJECT_DIR,"/input/Baso.rds")) %>% 
+  filter(TMMID %in% multiID) %>% 
+  filter(Date >= as.Date("2017-06-01") & Date <= as.Date("2021-03-31")) %>% #secondary
+  arrange(Date) %>% 
+  distinct(TMMID, .keep_all = T) -> Baso2
+
+#1st
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_2.raw")) %>% as_tibble(),
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_3.raw")) %>% as_tibble()) %>% select(IID,Geno=7) %>% mutate(Geno=2-Geno) %>% 
+  left_join(
+    bind_rows('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),
+    'path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% distinct(TMMID,.keep_all=T)
+,by=c("IID"="igid")) %>% inner_join(Baso1, by="TMMID") %>% left_join(
+  read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% mutate(Birth=lubridate::ym(Birth))
+  ,by="TMMID") %>% mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1)) %>% trunc()) %>% 
+  mutate(Sex=if_else(Sex=="女性","female","male") %>% as_factor()) %>% select(TMMID,Sex,Geno,Date1=Date,Age1=Age,Val1=Val) -> dtBaso1
+
+#2nd
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_2.raw")) %>% as_tibble(),
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_3.raw")) %>% as_tibble()) %>% select(IID,Geno=7) %>% mutate(Geno=2-Geno) %>% 
+  left_join(
+    bind_rows('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),
+    'path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% distinct(TMMID,.keep_all=T)
+,by=c("IID"="igid")) %>% inner_join(Baso2, by="TMMID") %>% left_join(
+  read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% mutate(Birth=lubridate::ym(Birth))
+  ,by="TMMID") %>% mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1)) %>% trunc()) %>% 
+  mutate(Sex=if_else(Sex=="女性","female","male") %>% as_factor()) %>% select(TMMID,Date2=Date,Age2=Age,Val2=Val) -> dtBaso2
+
+dtBaso1 %>% inner_join(dtBaso2, by = "TMMID") %>% 
+  drop_na(Geno) %>% 
+  mutate(Geno = case_when(Geno == 0 ~ "A/A", Geno == 1 ~ "A/G", Geno == 2 ~ "G/G", TRUE ~ "NA")) %>% 
+  mutate(Geno = factor(Geno, levels = c("A/A", "A/G", "G/G"))) %>% 
+  mutate(delta = (Val2 - Val1)/100) %>% 
+  ggplot(aes(x = delta, fill = Geno)) + 
+  geom_density() + 
+  scale_fill_manual(values=c("navy","blue","royalblue")) + 
+  facet_wrap(~ Geno, ncol = 1) + 
+  labs(x = expression(paste("Difference in cell number (x",10^2,"/",mu,"L)")), fill = "rs6782812") +
+  scale_x_continuous(limits = c(-1,1)) +
+  theme_bw() + 
+  theme(axis.title = element_text(size = 22), axis.text = element_text(size = 20), 
+        strip.text = element_text(size = 14))
+ggsave(str_c(PROJECT_DIR,"/output/figs/dCount_Baso.pdf"),device=cairo_pdf,width=12,height=22,units="cm")
+ggsave(str_c(PROJECT_DIR,"/output/figs/dCount_Baso_range200.pdf"),device=cairo_pdf,width=12,height=22,units="cm")
+
+wilcox.test(
+  dtBaso1 %>% inner_join(dtBaso2, by = "TMMID") %>% 
+    drop_na(Geno) %>% 
+    mutate(delta = Val2 - Val1) %>% 
+    filter(Geno == 0) %>% 
+    pluck("delta"),
+  dtBaso1 %>% inner_join(dtBaso2, by = "TMMID") %>% 
+    drop_na(Geno) %>% 
+    mutate(delta = Val2 - Val1) %>% 
+    filter(Geno == 1) %>% 
+    pluck("delta"))
+
+wilcox.test(
+  dtBaso1 %>% inner_join(dtBaso2, by = "TMMID") %>% 
+    drop_na(Geno) %>% 
+    mutate(delta = Val2 - Val1) %>% 
+    filter(Geno == 1) %>% 
+    pluck("delta"),
+  dtBaso1 %>% inner_join(dtBaso2, by = "TMMID") %>% 
+    drop_na(Geno) %>% 
+    mutate(delta = Val2 - Val1) %>% 
+    filter(Geno == 2) %>% 
+    pluck("delta"))
+
+dtBaso1 %>% inner_join(dtBaso2, by = "TMMID") %>% 
+  drop_na(Geno) %>% 
+  mutate(delta = Val2 - Val1) %>% 
+  mutate(Date1 = lubridate::ymd(Date1)) %>% 
+  mutate(Date2 = lubridate::ymd(Date2)) %>% 
+  mutate(difD = as.numeric(Date2 - Date1)) %>% 
+  mutate(difY = lubridate::time_length(lubridate::interval(Date1, Date2), unit = "years")) %>% 
+  ggplot(aes(x = difY)) + 
+  geom_histogram(color = "navy", fill = "royalblue") + 
+  scale_y_continuous(limits = c(0, 4000), expand = c(0, 0)) + 
+  labs(x = "Difference in years", y = "Sample numbers") + 
+  theme_bw() + 
+  theme(axis.title = element_text(size = 22), axis.text = element_text(size = 20))
+ggsave(str_c(PROJECT_DIR,"/output/figs/dYears_Baso.pdf"),device=cairo_pdf,width=14,height=20,units="cm")  
+
+#Eosi
+read_rds(str_c(PROJECT_DIR,"/input/Eosi.rds"))%>% 
+  filter(Date >= as.Date("2013-07-01") & Date <= as.Date("2021-03-31")) %>% #baseline & secondary
+  group_by(TMMID) %>% summarise(n=n()) %>% 
+  filter(n >= 2) %>% pluck("TMMID") ->  multiID
+
+read_rds(str_c(PROJECT_DIR,"/input/Eosi.rds")) %>% 
+  filter(TMMID %in% multiID) %>% 
+  filter(Date >= as.Date("2013-07-01") & Date <= as.Date("2017-03-31")) %>% #baseline
+  arrange(Date) %>% 
+  distinct(TMMID, .keep_all = T) -> Eosi1
+
+read_rds(str_c(PROJECT_DIR,"/input/Eosi.rds")) %>% 
+  filter(TMMID %in% multiID) %>% 
+  filter(Date >= as.Date("2017-06-01") & Date <= as.Date("2021-03-31")) %>% #secondary
+  arrange(Date) %>% 
+  distinct(TMMID, .keep_all = T) -> Eosi2
+
+#1st
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_2.raw")) %>% as_tibble(),
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_3.raw")) %>% as_tibble()) %>% select(IID,Geno=7) %>% mutate(Geno=2-Geno) %>% 
+  left_join(
+    bind_rows('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),
+    'path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% distinct(TMMID,.keep_all=T)
+,by=c("IID"="igid")) %>% inner_join(Eosi1, by="TMMID") %>% left_join(
+  read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% mutate(Birth=lubridate::ym(Birth))
+  ,by="TMMID") %>% mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1)) %>% trunc()) %>% 
+  mutate(Sex=if_else(Sex=="女性","female","male") %>% as_factor()) %>% select(TMMID,Sex,Geno,Date1=Date,Age1=Age,Val1=Val) -> dtEosi1
+
+#2nd
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_2.raw")) %>% as_tibble(),
+  fread(str_c(PROJECT_DIR,"/tmp/topSNV_3.raw")) %>% as_tibble()) %>% select(IID,Geno=7) %>% mutate(Geno=2-Geno) %>% 
+  left_join(
+    bind_rows('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),
+    'path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% distinct(TMMID,.keep_all=T)
+,by=c("IID"="igid")) %>% inner_join(Eosi2, by="TMMID") %>% left_join(
+  read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% mutate(Birth=lubridate::ym(Birth))
+  ,by="TMMID") %>% mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1)) %>% trunc()) %>% 
+  mutate(Sex=if_else(Sex=="女性","female","male") %>% as_factor()) %>% select(TMMID,Date2=Date,Age2=Age,Val2=Val) -> dtEosi2
+
+dtEosi1 %>% inner_join(dtEosi2, by = "TMMID") %>% 
+  drop_na(Geno) %>% 
+  mutate(Geno = case_when(Geno == 0 ~ "A/A", Geno == 1 ~ "A/G", Geno == 2 ~ "G/G", TRUE ~ "NA")) %>% 
+  mutate(Geno = factor(Geno, levels = c("A/A", "A/G", "G/G"))) %>% 
+  mutate(delta = (Val2 - Val1)/100) %>% 
+  ggplot(aes(x = delta, fill = Geno)) + 
+  geom_density() + 
+  scale_fill_manual(values=c("red4","red","tomato")) + 
+  facet_wrap(~ Geno, ncol = 1) + 
+  labs(x = expression(paste("Difference in cell number (x",10^2,"/",mu,"L)")), fill = "rs6782812") +
+  scale_x_continuous(limits = c(-5,5)) +
+  theme_bw() + 
+  theme(axis.title = element_text(size = 22), axis.text = element_text(size = 20), 
+        strip.text = element_text(size = 14))
+ggsave(str_c(PROJECT_DIR,"/output/figs/dCount_Eosi.pdf"),device=cairo_pdf,width=12,height=22,units="cm")
+ggsave(str_c(PROJECT_DIR,"/output/figs/dCount_Eosi_range10.pdf"),device=cairo_pdf,width=12,height=22,units="cm")
+
+wilcox.test(
+  dtEosi1 %>% inner_join(dtEosi2, by = "TMMID") %>% 
+    drop_na(Geno) %>% 
+    mutate(delta = Val2 - Val1) %>% 
+    filter(Geno == 0) %>% 
+    pluck("delta"),
+  dtEosi1 %>% inner_join(dtEosi2, by = "TMMID") %>% 
+    drop_na(Geno) %>% 
+    mutate(delta = Val2 - Val1) %>% 
+    filter(Geno == 1) %>% 
+    pluck("delta"))
+
+wilcox.test(
+  dtEosi1 %>% inner_join(dtEosi2, by = "TMMID") %>% 
+    drop_na(Geno) %>% 
+    mutate(delta = Val2 - Val1) %>% 
+    filter(Geno == 1) %>% 
+    pluck("delta"),
+  dtEosi1 %>% inner_join(dtEosi2, by = "TMMID") %>% 
+    drop_na(Geno) %>% 
+    mutate(delta = Val2 - Val1) %>% 
+    filter(Geno == 2) %>% 
+    pluck("delta"))
+
+dtEosi1 %>% inner_join(dtEosi2, by = "TMMID") %>% 
+  drop_na(Geno) %>% 
+  mutate(delta = Val2 - Val1) %>% 
+  mutate(Date1 = lubridate::ymd(Date1)) %>% 
+  mutate(Date2 = lubridate::ymd(Date2)) %>% 
+  mutate(difD = as.numeric(Date2 - Date1)) %>% 
+  mutate(difY = lubridate::time_length(lubridate::interval(Date1, Date2), unit = "years")) %>% 
+  ggplot(aes(x = difY)) + 
+  geom_histogram(color = "red4", fill = "tomato") + 
+  scale_y_continuous(limits = c(0, 4000), expand = c(0, 0)) + 
+  labs(x = "Difference in years", y = "Sample numbers") + 
+  theme_bw() + 
+  theme(axis.title = element_text(size = 22), axis.text = element_text(size = 20))
+ggsave(str_c(PROJECT_DIR,"/output/figs/dYears_Eosi.pdf"),device=cairo_pdf,width=14,height=20,units="cm")  

@@ -1,0 +1,765 @@
+####Extract_samples_of_JPA_2
+##R
+library(tidyverse)
+library(data.table)
+
+PROJECT_DIR <- 'path/to/project/directory'
+
+tPheno <- "Baso"
+# tPheno <- "Eosi"
+
+read_rds(str_c(PROJECT_DIR,"/input/",tPheno,".rds")) %>% distinct(TMMID) %>% 
+  inner_join(read_csv('path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),by="TMMID") %>% 
+  filter(!(igid %in% (read_delim(str_c(PROJECT_DIR,"/input/QC_BirThree_3.fam"),delim=" ",col_names=F) %>% pluck("X2")))) %>% 
+  filter(!(igid %in% (read_delim(str_c(PROJECT_DIR,"/input/QC_commu_3.fam"),delim=" ",col_names=F) %>% pluck("X2")))) %>% 
+  distinct(TMMID,.keep_all=T) %>% select(TMMID,FID=igid,IID=igid) %>% 
+  write_rds(file=str_c(PROJECT_DIR,"/tmp/tmm_igid_2.rds"),compress="gz")
+
+read_rds(file=str_c(PROJECT_DIR,"/tmp/tmm_igid_2.rds")) %>% select(-TMMID) %>% 
+  write_tsv(file=str_c(PROJECT_DIR,"/tmp/JPAV2_id.tsv"),col_names=F)
+
+dtPath <- tibble(path_up=dir(path='path/to/repository_of_imputed_genotype_data_derived_from_JPA_2',full.names=T)) %>% 
+  filter(str_detect(path_up,pattern=".*scaffold$")) %>% mutate(No=str_extract(path_up,pattern="(?<=BATCH_)[0-9]{3}"))
+dtPath[4,1] <- "'path/to/repository_of_imputed_genotype_data_derived_from_JPA_2'/JPAV2_BATCH_004_20201119_3.5KJPNv2_scaffold_r2"
+dtPath[5,1] <- "'path/to/repository_of_imputed_genotype_data_derived_from_JPA_2'/JPAV2_BATCH_005_20201119_3.5KJPNv2_scaffold_r2"
+dtPath[6,1] <- "'path/to/repository_of_imputed_genotype_data_derived_from_JPA_2'/JPAV2_BATCH_006_20191205_3.5KJPNv2_scaffold_r1"
+dtPath[7,1] <- "'path/to/repository_of_imputed_genotype_data_derived_from_JPA_2'/JPAV2_BATCH_007_20191205_3.5KJPNv2_scaffold_r1"
+dtPath[8,1] <- "'path/to/repository_of_imputed_genotype_data_derived_from_JPA_2'/JPAV2_BATCH_008_20201119_3.5KJPNv2_scaffold_r2"
+dtPath %>% write_rds(str_c(PROJECT_DIR,"/tmp/sample_data_2.rds"),compress="gz")
+
+tibble(tChr_No=1:22) %>% rowwise() %>% 
+  mutate(data=list(read_rds(str_c(PROJECT_DIR,"/tmp/sample_data_2.rds")) %>% mutate(Chr_No=tChr_No) %>% 
+                     mutate(cmd=str_c("cd ",path_up,"/03-imputation/outputs ; plink2 --bfile ./JPAv2_BATCH",No,"_igid.autosome.chr",Chr_No,".imputed.plink.idconverted --keep ${PROJECT_DIR}/tmp/${TPHENO}_JPAV2_id.tsv --make-pgen --out ${PROJECT_DIR}/tmp/Raw_",No,"_",Chr_No," ; ")) %>% 
+                     select(cmd))) %>% select(data) %>% unnest(cols=c(data)) %>% 
+  write_tsv(file=str_c(PROJECT_DIR,"/tmp/Raw_cmd_2.tsv"),col_names=F)
+
+##bash
+module load plink/20210606
+module load plink2/20220302
+
+export PROJECT_DIR='path/to/project/directory'
+export TPHENO=Baso
+# export TPHENO=Eosi
+
+chmod 750 ${PROJECT_DIR}/tmp/Raw_cmd_2.tsv
+cd ${PROJECT_DIR}/tmp
+${PROJECT_DIR}/tmp/Raw_cmd_2.tsv
+
+##R
+tibble(Raw_path=dir(path=str_c(PROJECT_DIR,"/tmp/"),full.names=F)) %>% filter(str_detect(Raw_path,pattern="(?<=^Raw_).*pgen$")) %>% 
+  mutate(Raw_path=str_extract(Raw_path,pattern=".*(?=.pgen$)")) %>% mutate(No=str_extract(Raw_path,pattern="(?<=^Raw_)[0-9]{3}")) %>% 
+  mutate(Chr_No=str_extract(Raw_path,pattern="(?<=[0-9]{3}_)[0-9]{1,}$") %>% as.numeric()) %>% arrange(Chr_No) %>% 
+  write_rds(str_c(PROJECT_DIR,"/tmp/Raw_path_2.rds"),compress="gz")
+
+map(read_rds(str_c(PROJECT_DIR,"/tmp/Raw_path_2.rds"))$No %>% unique(),~{i<-.
+read_rds(str_c(PROJECT_DIR,"/tmp/Raw_path_2.rds")) %>% filter(No==i) %>% mutate(cmd=str_c(Raw_path,".pgen ",Raw_path,".pvar ",Raw_path,".psam")) %>% 
+  select(cmd) %>% write_tsv(file=str_c(PROJECT_DIR,"/tmp/Raw_filelist_",i,".tsv"),col_names=F)
+})
+
+read_rds(str_c(PROJECT_DIR,"/tmp/Raw_path_2.rds")) %>% distinct(No) %>% 
+  mutate(cmd=str_c("plink2 --pmerge-list pfile ./Raw_filelist_",No,".tsv --make-bed --out cRaw_",No," ; ")) %>% 
+  select(cmd) %>% drop_na(cmd) %>% write_tsv(file=str_c(PROJECT_DIR,"/tmp/cRaw_cmd_2.tsv"),col_names=F)
+
+read_rds(str_c(PROJECT_DIR,"/tmp/Raw_path_2.rds")) %>% distinct(No,.keep_all=T) %>% mutate(cRaw_path=Raw_path %>% str_sub(start=1L,end=7L) %>% str_c("c",.)) %>% drop_na(No) %>%  
+  mutate(bed=str_c("./",cRaw_path,".bed")) %>% mutate(bim=str_c("./",cRaw_path,".bim")) %>% mutate(fam=str_c("./",cRaw_path,".fam")) %>% 
+  select(bed,bim,fam) %>% write_tsv(file=str_c(PROJECT_DIR,"/tmp/cRaw_filelist_2.tsv"),col_names=F)
+
+##bash
+chmod 750 ${PROJECT_DIR}/tmp/cRaw_cmd_2.tsv
+cd ${PROJECT_DIR}/tmp
+${PROJECT_DIR}/tmp/cRaw_cmd_2.tsv
+
+####Extract_INFO_score
+##R
+read_rds(str_c(PROJECT_DIR,"/tmp/sample_data_2.rds")) %>% 
+  mutate(cmd=str_c("cp ",path_up,"/03-imputation/outputs/JPAv2_BATCH",No,"_igid.autosome.chr1_22.imputed.hap_info.txt.gz ${PROJECT_DIR}/tmp/info/info_",No,".txt.gz ; ")) %>% 
+  select(cmd) %>% write_tsv(file=str_c(PROJECT_DIR,"/tmp/Info_cmd_2.tsv"),col_names=F)
+
+##bash
+chmod 750 ${PROJECT_DIR}/tmp/Info_cmd_2.tsv
+mkdir ${PROJECT_DIR}/tmp/info
+${PROJECT_DIR}/tmp/Info_cmd_2.tsv
+gunzip ${PROJECT_DIR}/tmp/info/info* 
+  
+  ##R
+  fread(str_c(PROJECT_DIR,"/tmp/info/info_001.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info001=info) %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_002.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info002=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_003.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info003=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_006.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info006=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_007.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info007=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_009.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info009=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_010.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info010=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_011.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info011=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_012.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info012=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_013.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info013=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_014.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info014=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_015.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info015=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_016.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info016=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_017.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info017=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_019.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info019=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_023.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info023=info),by="snp_id") %>% 
+  inner_join(fread(str_c(PROJECT_DIR,"/tmp/info/info_024.txt")) %>% as_tibble() %>% select(snp_id,info) %>% rename(info024=info),by="snp_id") %>% 
+  write_rds(str_c(PROJECT_DIR,"/input/Info_JPAv2.rds"),compress="gz")
+
+##bash
+rm -rf ${PROJECT_DIR}/tmp/info
+
+##R
+read_rds(str_c(PROJECT_DIR,"/input/Info_JPAv2.rds")) %>% 
+  mutate(info=(info001+info002+info003+info006+info007+info009+info010+info011+info012+info013+info014+info015+info016+info017+info019+info023+info024)/17) %>% 
+  select(snp_id,info) %>% rename(SNV=snp_id) %>% write_rds(str_c(PROJECT_DIR,"/input/Info_JPAv2_mean.rds"),compress="gz")
+
+read_rds(str_c(PROJECT_DIR,"/input/Info_JPAv2_mean.rds")) %>% filter(info < 0.7) %>% distinct(SNV) %>% 
+  write_tsv(file=str_c(PROJECT_DIR,"/output/rm_snv_info_2.tsv"),col_names=F)
+
+read_rds(str_c(PROJECT_DIR,"/input/Info_JPAv2_mean.rds")) %>% 
+  ggplot(aes(x=info)) + 
+  geom_histogram(color="black",fill="gray80",bins=100) + 
+  geom_vline(xintercept=0.7,color="darkblue",linetype=1) + 
+  labs(x="Info score",y="Number of variants") + 
+  scale_y_continuous(expand=c(0,0)) + 
+  scale_x_continuous(expand=c(0.02,0)) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16)) 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Info_distribution_JPAV2.png"),width=18,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Info_distribution_JPAV2.pdf"),device=cairo_pdf,width=18,height=22,units="cm")
+
+####Quality_control
+##bash
+plink --merge-list ${PROJECT_DIR}/tmp/cRaw_filelist_2.tsv \
+--exclude ${PROJECT_DIR}/output/rm_snv_info_2.tsv \
+--make-bed \
+--out ${PROJECT_DIR}/tmp/QC0_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/QC0_2.txt
+
+plink2 --bfile ${PROJECT_DIR}/tmp/QC0_2 \
+--snps-only \
+--missing variant-only \
+--out ${PROJECT_DIR}/output/QC0_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/QC0_vmiss_2.txt
+
+##R
+fread(file=str_c(PROJECT_DIR,"/output/QC0_2.vmiss")) %>% as_tibble() %>% select(F_MISS) %>% 
+  ggplot(aes(x=F_MISS)) + 
+  geom_histogram(color="black",fill="gray80",bins=100) + 
+  geom_vline(xintercept=0.02,color="darkblue",linetype=1) + 
+  labs(x="Variant-based missing rate",y="Number of variants") + 
+  scale_y_continuous(expand=c(0,0),limits=c(0,1.5*10^7)) + 
+  scale_x_continuous(expand=c(0.02,0)) +
+  scale_y_cut(breaks=10000, which=1, scales=4, space=0.3) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16)) 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Variant_based_miss_JPAV2.png"),width=18,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Variant_based_miss_JPAV2.pdf"),device=cairo_pdf,width=18,height=22,units="cm")
+
+##bash
+plink2 --bfile ${PROJECT_DIR}/tmp/QC0_2 \
+--geno 0.02 \
+--maf 0.01 \
+--autosome \
+--snps-only \
+--make-pgen \
+--out ${PROJECT_DIR}/tmp/QC0m_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/QC0m_2.txt
+
+plink2 --pfile ${PROJECT_DIR}/tmp/QC0m_2 \
+--missing sample-only \
+--out ${PROJECT_DIR}/output/QC0m_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/QC0m_smiss_2.txt
+
+plink2 --pfile ${PROJECT_DIR}/tmp/QC0m_2 \
+--hardy \
+--out ${PROJECT_DIR}/output/QC0m_2
+
+plink2 --pfile ${PROJECT_DIR}/tmp/QC0m_2 \
+--mind 0.02 \
+--hwe 1e-6 \
+--make-pgen \
+--out ${PROJECT_DIR}/tmp/QC1_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/QC1_2.txt
+
+plink2 --pfile ${PROJECT_DIR}/tmp/QC1_2 \
+--indep-pairwise 50 5 0.5 \
+--out ${PROJECT_DIR}/output/indepSNP_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/indep_2.txt
+
+plink2 --pfile ${PROJECT_DIR}/tmp/QC1_2 \
+--extract ${PROJECT_DIR}/output/indepSNP_2.prune.in \
+--het \
+--out ${PROJECT_DIR}/output/QC1_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/Hetero_2.txt
+
+##R
+fread(str_c(PROJECT_DIR,"/output/QC1_2.het"),header=T) %>% as_tibble() %>% 
+  rename(FID=`#FID`) %>% mutate(HET_RATE=(OBS_CT-`O(HOM)`)/OBS_CT) %>% 
+  mutate(sd=if_else(HET_RATE < mean(HET_RATE)-3*sd(HET_RATE) | HET_RATE > mean(HET_RATE)+3*sd(HET_RATE),1,0)) %>% 
+  write_rds(file=str_c(PROJECT_DIR,"/output/Het_2.rds"),compress="gz")
+
+read_rds(file=str_c(PROJECT_DIR,"/output/Het_2.rds")) %>% filter(sd==1) %>% select(FID,IID) %>% distinct(IID,.keep_all=T) %>% 
+  write_tsv(file=str_c(PROJECT_DIR,"/output/exHet_2.tsv"),col_names=F)
+
+read_tsv(file=str_c(PROJECT_DIR,"/output/exHet_2.tsv"),col_names=F)
+#n=1497
+
+##bash
+plink2 --pfile ${PROJECT_DIR}/tmp/QC1_2 \
+--remove ${PROJECT_DIR}/output/exHet_2.tsv \
+--make-bed \
+--out ${PROJECT_DIR}/tmp/QC2_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/QC2_2.txt
+
+####Merge_with_1000_Genomes_data
+mkdir ${PROJECT_DIR}/tmp/onetime
+cd ${PROJECT_DIR}/tmp/onetime
+awk '{print$2}' ${PROJECT_DIR}/tmp/QC2_2.bim | sort | uniq > ./SNP_tommo.txt
+
+plink2 --pfile 'path/to/1000_Genomes_phase_3_primary_release_data' \
+--geno 0.02 \
+--maf 0.05 \
+--export vcf bgz \
+--out ./G1000
+
+module load bcftools/1.9
+
+bcftools norm \
+--multiallelics -any \
+G1000.vcf.gz | \
+bcftools norm \
+--rm-dup none \
+--output-type z \
+--output G1000_bi.vcf.gz
+
+plink2 --vcf ./G1000_bi.vcf.gz \
+--set-all-var-ids @:#_\$r_\$a \
+  --new-id-max-allele-len 662 \
+--mind 0.02 \
+--make-pgen \
+--out ./G1000_bi
+
+plink2 --pfile  ./G1000_bi \
+--extract ./SNP_tommo.txt \
+--make-bed \
+--out ./G1000_tm
+
+awk '{print$2}' ./G1000_tm.bim > ./G1000_SNPs.txt
+
+plink --bfile ${PROJECT_DIR}/tmp/QC2_2 \
+--extract ./G1000_SNPs.txt \
+--recode \
+--make-bed \
+--out ./tommo_G1000 \
+2>&1 | tee ${PROJECT_DIR}/output/log/tommo_G1000_2.txt
+
+awk '{print$2,$4}' ./tommo_G1000.map > ./buildtommo.txt
+
+plink --bfile ./G1000_tm \
+--update-map ./buildtommo.txt \
+--make-bed \
+--out ./G1000-adj
+
+awk '{print$2,$5}' ./G1000-adj.bim > ./G1000_ref-list.txt
+
+plink --bfile ./tommo_G1000 \
+--reference-allele ./G1000_ref-list.txt \
+--make-bed \
+--out ./tommo-adj
+
+awk '{print$2,$5,$6}' ./G1000-adj.bim > ./G1000_tmp
+awk '{print$2,$5,$6}' ./tommo-adj.bim > ./tommo_tmp
+sort ./G1000_tmp ./tommo_tmp |uniq -u > ${PROJECT_DIR}/output/all_differences_2.txt
+
+plink --bfile ./tommo_G1000 \
+--bmerge ./G1000-adj.bed ./G1000-adj.bim ./G1000-adj.fam \
+--make-bed \
+--out ./tommo_G1000_merge \
+2>&1 | tee ${PROJECT_DIR}/output/log/tommo_G1000_merge_2.txt
+
+plink --bfile ./tommo_G1000_merge \
+--make-set 'path/to/high_LD_regions.tsv' \
+--write-set \
+--out ./hild_merge
+
+plink2 --bfile ./tommo_G1000_merge \
+--indep-pairwise 50 5 0.5 \
+--out ./merge
+
+plink2 --bfile ${PROJECT_DIR}/tmp/onetime/tommo_G1000_merge \
+--extract ./merge.prune.in \
+--exclude ./hild_merge.set \
+--pca 10 approx \
+--out ${PROJECT_DIR}/output/tommo_G1000_merge_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/pca_tommo_G1000_2.txt
+
+####make_QC_figs
+##R
+#smiss
+fread(file=str_c(PROJECT_DIR,"/output/QC0m_2.smiss")) %>% as_tibble() %>% 
+  ggplot(aes(x=F_MISS)) + 
+  geom_histogram(color="black",fill="gray80",bins=100) + 
+  geom_vline(xintercept=0.02,color="darkblue",linetype=1) + 
+  labs(x="Sample-based missing rate",y="Number of samples") + 
+  scale_y_continuous(expand=c(0,0),limits=c(0,25000)) + 
+  scale_x_continuous(expand=c(0.01,0)) + 
+  scale_y_cut(breaks=20, which=1, scales=4, space=0.3) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16)) 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Sample_based_miss_JPAV2.png"),width=18,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Sample_based_miss_JPAV2.pdf"),device=cairo_pdf,width=18,height=22,units="cm")
+
+#HWE
+fread(file=str_c(PROJECT_DIR,"/output/QC0m_2.hardy")) %>% as_tibble() %>% select(P) %>% 
+  ggplot(aes(x=-log10(P))) + 
+  geom_histogram(color="black",fill="gray80",binwidth = 1) + 
+  geom_vline(xintercept=6,color="darkblue",linetype=1) + 
+  labs(x=expression(paste(-log[10]," (",italic("p"),")")),y="Number of variants") + 
+  scale_y_continuous(expand=c(0,0),limits=c(0,4*10^6)) + 
+  scale_x_continuous(expand = c(0.01,0)) + 
+  scale_y_cut(breaks=6000, which=1, scales=4, space=0.3) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16)) 
+ggsave(str_c(PROJECT_DIR,"/output/figs/HWE_JPAV2.png"),width=18,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/HWE_JPAV2.pdf"),device=cairo_pdf,width=18,height=22,units="cm")
+
+#Heterozygosity
+dtHet <- read_rds(file=str_c(PROJECT_DIR,"/output/Het_2.rds"))
+
+dtHet %>% select(HET_RATE) %>% 
+  ggplot(aes(x=HET_RATE)) + 
+  geom_histogram(color="black",fill="gray80",bins=100) + 
+  geom_vline(xintercept=mean(dtHet$HET_RATE)-3*sd(dtHet$HET_RATE),color="darkblue",linetype=1) + 
+  geom_vline(xintercept=mean(dtHet$HET_RATE)+3*sd(dtHet$HET_RATE),color="darkblue",linetype=1) + 
+  labs(x="Heterozygosity rate",y="Number of samples") + 
+  scale_y_continuous(expand=c(0,0),limits=c(0,16000)) + 
+  scale_x_continuous(expand=c(0.01,0)) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16)) 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Heterozygosity_Rate_JPAV2.png"),width=18,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Heterozygosity_Rate_JPAV2.pdf"),device=cairo_pdf,width=18,height=22,units="cm")
+
+#PCA
+dtPCA <- fread(file=str_c(PROJECT_DIR,"/output/tommo_G1000_merge_2.eigenvec"),header=T) %>% as_tibble() %>% 
+  left_join(
+    read_tsv(file='path/to/1000_Genomes_phase_3_primary_release_data.psam',col_names=T) %>% 
+      mutate(race=if_else(Population=="JPT","JPT",SuperPop)) %>% select(IID=1,race),by="IID") %>% 
+  mutate(race=if_else(is.na(race),"Target",race)) %>% arrange(race) %>% mutate(group=as.factor(race))
+
+rPC <- fread(file=str_c(PROJECT_DIR,"/output/tommo_G1000_merge_2.eigenval"),header=F) %>% as_tibble() %>% 
+  mutate(pve=V1 / sum(V1) * 100)
+
+ggplot(dtPCA,aes(x=PC1,y=PC2,color=group,size=group,shape=group,alpha=group)) + 
+  geom_point(stroke=0.5) + 
+  labs(x="PC1",y="PC2") + 
+  scale_color_manual(name="Race",values=c("lightskyblue3","orange1","darkolivegreen2","plum3","deeppink","turquoise","black")) + 
+  scale_size_manual(name="Race",values=c(rep(2,6),1)) + 
+  scale_shape_manual(name="Race",values=c(rep(19,6),3)) + 
+  scale_alpha_manual(name="Race",values=c(rep(0.6,6),1)) +
+  geom_vline(xintercept= -0.0006,color="darkblue",linetype=1) + 
+  labs(x=str_c("PC1_",pluck(rPC,"pve",1) %>% format(digits=3)," %"),
+       y=str_c("PC2_",pluck(rPC,"pve",2) %>% format(digits=3)," %")) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16),
+        legend.title=element_blank(),legend.text=element_text(size=16),
+        legend.box.background=element_rect(fill=NA,color="black"))
+ggsave(str_c(PROJECT_DIR,"/output/figs/PopulationStratification_JPAV2.pdf"),width=22,height=20,units="cm",device=cairo_pdf)
+ggsave(str_c(PROJECT_DIR,"/output/figs/PopulationStratification_JPAV2.png"),width=22,height=20,dpi=600,units="cm")
+
+dtPCA %>% filter(!(race == "Target" & PC1 < -0.0006)) %>% filter(PC1 > -0.005) %>% select(FID=`#FID`,IID) %>%
+  write_tsv(file=str_c(PROJECT_DIR,"/tmp/inSubPop_2.tsv"),col_names=F)
+
+##bash
+plink2 --bfile ${PROJECT_DIR}/tmp/onetime/tommo_G1000_merge \
+--keep ${PROJECT_DIR}/tmp/inSubPop_2.tsv \
+--exclude ${PROJECT_DIR}/tmp/onetime/hild_merge.set \
+--pca 10 approx \
+--out ${PROJECT_DIR}/output/tommo_G1000_merge_EAS_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/pca_tommo_G1000_EAS_2.txt
+
+##R
+dtPCA_EAS <- fread(file=str_c(PROJECT_DIR,"/output/tommo_G1000_merge_EAS_2.eigenvec"),header=T) %>% as_tibble() %>%
+  left_join(
+    read_tsv(file='path/to/1000_Genomes_phase_3_primary_release_data.psam',col_names=T) %>% mutate(race=Population) %>% select(IID=1,race),by="IID") %>%
+  mutate(race=if_else(is.na(race),"Target",race)) %>% arrange(race) %>% mutate(group=as.factor(race))
+
+rPC <- fread(file=str_c(PROJECT_DIR,"/output/tommo_G1000_merge_EAS_2.eigenval"),header=F) %>% as_tibble() %>%
+  mutate(pve=V1 / sum(V1) * 100)
+
+ggplot(dtPCA_EAS,aes(x=PC1,y=PC2,color=group,size=group,shape=group,alpha=group)) +
+  geom_point(stroke=0.5) +
+  labs(x="PC1",y="PC2") +
+  scale_color_manual(name="Race",values=c("deepskyblue","orchid","palegreen","deeppink","orange","black")) +
+  scale_size_manual(name="Race",values=c(rep(2,5),1)) +
+  scale_shape_manual(name="Race",values=c(rep(19,5),3)) +
+  scale_alpha_manual(name="Race",values=c(rep(0.6,5),1)) +
+  geom_vline(xintercept= -0.013,color="darkblue",linetype=1) +
+  labs(x=str_c("PC1_",pluck(rPC,"pve",1) %>% format(digits=3)," %"),
+       y=str_c("PC2_",pluck(rPC,"pve",2) %>% format(digits=3)," %")) +
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16),
+        legend.title=element_blank(),legend.text=element_text(size=16),
+        legend.box.background=element_rect(fill=NA,color="black"))
+ggsave(str_c(PROJECT_DIR,"/output/figs/PopulationStratification_EAS_JPAV2.pdf"),width=22,height=20,units="cm",device=cairo_pdf)
+ggsave(str_c(PROJECT_DIR,"/output/figs/PopulationStratification_EAS_JPAV2.png"),width=22,height=20,dpi=600,units="cm")
+
+bind_rows(
+  dtPCA %>% filter(race == "Target" & PC1 < -0.0006) %>% select(FID=`#FID`,IID),
+  dtPCA_EAS %>% filter(race == "Target" & PC1 < -0.013) %>% select(FID=`#FID`,IID)) %>% 
+  write_tsv(file=str_c(PROJECT_DIR,"/output/exRace_2.tsv"),col_names=F)
+
+read_tsv(file=str_c(PROJECT_DIR,"/output/exRace_2.tsv"),col_names=F)
+#n=144
+
+##bash
+plink2 --bfile ${PROJECT_DIR}/tmp/QC2_2 \
+--remove ${PROJECT_DIR}/output/exRace_2.tsv \
+--make-pgen \
+--out ${PROJECT_DIR}/tmp/QC3_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/QC3_2.txt 
+
+rm -f ${PROJECT_DIR}/tmp/cRaw*
+  rm -f ${PROJECT_DIR}/tmp/Raw* 
+  rm -rf ${PROJECT_DIR}/tmp/onetime
+
+####Crypt_relatedness
+##R
+#BirThree
+plink2 --pfile ${PROJECT_DIR}/tmp/QC3_2 \
+--keep ${PROJECT_DIR}/tmp/BirThree_igid.tsv \
+--make-pgen \
+--out ${PROJECT_DIR}/tmp/QC3_BirThree_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/QC3_BirThree_2.txt
+
+plink2 --pfile ${PROJECT_DIR}/tmp/QC3_BirThree_2 \
+--indep-pairwise 50 5 0.5 \
+--out ${PROJECT_DIR}/tmp/QC3_BirThree_2
+
+plink2 --pfile ${PROJECT_DIR}/tmp/QC3_BirThree_2 \
+--extract ${PROJECT_DIR}/tmp/QC3_BirThree_2.prune.in \
+--make-king-table \
+--king-table-filter 0.0884 \
+--out ${PROJECT_DIR}/output/kin_BirThree_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/kinship_BirThree_2.txt 
+
+##R
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/output/kin_BirThree_2.kin0")) %>% as_tibble() %>% select(IID=IID1),
+  fread(str_c(PROJECT_DIR,"/output/kin_BirThree_2.kin0")) %>% as_tibble() %>% select(IID=IID2)) %>% 
+  group_by(IID) %>% summarise(n=n()) %>% arrange(desc(n)) %>% filter(n > 1) %>% mutate(FID=IID) %>% 
+  select(FID,IID) %>% write_tsv(str_c(PROJECT_DIR,"/output/rm_multi_kin_BirThree_2.tsv"),col_names=F)
+
+##bash
+plink2 --pfile ${PROJECT_DIR}/tmp/QC3_BirThree_2 \
+--extract ${PROJECT_DIR}/tmp/QC3_BirThree_2.prune.in \
+--remove ${PROJECT_DIR}/output/rm_multi_kin_BirThree_2.tsv \
+--make-king-table \
+--king-table-filter 0.0884 \
+--out ${PROJECT_DIR}/output/kin_2nd_BirThree_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/kinship_2nd_BirThree_2.txt 
+
+##R
+fread(str_c(PROJECT_DIR,"/output/kin_2nd_BirThree_2.kin0")) %>% as_tibble() %>% left_join(
+  fread(str_c(PROJECT_DIR,"/output/QC0m_2.smiss")) %>% as_tibble() %>% select(IID,MISS1=F_MISS),by=c("IID1"="IID")) %>% left_join(
+    fread(str_c(PROJECT_DIR,"/output/QC0m_2.smiss")) %>% as_tibble() %>% select(IID,MISS2=F_MISS),by=c("IID2"="IID")) %>% 
+  mutate(rmID=if_else(MISS1>MISS2,IID1,IID2)) %>% distinct(rmID) %>% mutate(rmID2=rmID) %>% 
+  bind_rows(read_tsv(str_c(PROJECT_DIR,"/output/rm_multi_kin_BirThree_2.tsv"),col_names=F) %>% rename(rmID=X1,rmID2=X2)) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/input/rmID_kin_BirThree_2.tsv"),col_names=F)
+
+read_tsv(str_c(PROJECT_DIR,"/input/rmID_kin_BirThree_2.tsv"),col_names=F)
+#n=4425
+
+##bash
+plink2 --pfile ${PROJECT_DIR}/tmp/QC3_BirThree_2 \
+--remove ${PROJECT_DIR}/input/rmID_kin_BirThree_2.tsv \
+--make-bed \
+--out ${PROJECT_DIR}/input/QC_BirThree_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/rm_kinship_BirThree_2.txt 
+
+plink --bfile ${PROJECT_DIR}/input/QC_BirThree_2 \
+--make-set 'path/to/high_LD_regions.tsv' \
+--write-set \
+--out ${PROJECT_DIR}/tmp/hild_BirThree_2
+
+plink2 --bfile ${PROJECT_DIR}/input/QC_BirThree_2 \
+--extract ${PROJECT_DIR}/tmp/QC3_BirThree_2.prune.in \
+--exclude ${PROJECT_DIR}/tmp/hild_BirThree_2.set \
+--pca 10 approx \
+--out ${PROJECT_DIR}/output/QC_BirThree_2
+
+#commu
+plink2 --pfile ${PROJECT_DIR}/tmp/QC3_2 \
+--remove ${PROJECT_DIR}/tmp/BirThree_igid.tsv \
+--make-pgen \
+--out ${PROJECT_DIR}/tmp/QC3_commu_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/QC3_commu_2.txt
+
+plink2 --pfile ${PROJECT_DIR}/tmp/QC3_commu_2 \
+--indep-pairwise 50 5 0.5 \
+--out ${PROJECT_DIR}/tmp/QC3_commu_2
+
+plink2 --pfile ${PROJECT_DIR}/tmp/QC3_commu_2 \
+--extract ${PROJECT_DIR}/tmp/QC3_commu_2.prune.in \
+--make-king-table \
+--king-table-filter 0.0884 \
+--out ${PROJECT_DIR}/output/kin_commu_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/kinship_commu_2.txt 
+
+##R
+bind_rows(
+  fread(str_c(PROJECT_DIR,"/output/kin_commu_2.kin0")) %>% as_tibble() %>% select(IID=IID1),
+  fread(str_c(PROJECT_DIR,"/output/kin_commu_2.kin0")) %>% as_tibble() %>% select(IID=IID2)) %>% 
+  group_by(IID) %>% summarise(n=n()) %>% arrange(desc(n)) %>% filter(n > 1) %>% mutate(FID=IID) %>% 
+  select(FID,IID) %>% write_tsv(str_c(PROJECT_DIR,"/output/rm_multi_kin_commu_2.tsv"),col_names=F)
+
+##bash
+plink2 --pfile ${PROJECT_DIR}/tmp/QC3_commu_2 \
+--extract ${PROJECT_DIR}/tmp/QC3_commu_2.prune.in \
+--remove ${PROJECT_DIR}/output/rm_multi_kin_commu_2.tsv \
+--make-king-table \
+--king-table-filter 0.0884 \
+--out ${PROJECT_DIR}/output/kin_2nd_commu_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/kinship_2nd_commu_2.txt 
+
+##R
+fread(str_c(PROJECT_DIR,"/output/kin_2nd_commu_2.kin0")) %>% as_tibble() %>% left_join(
+  fread(str_c(PROJECT_DIR,"/output/QC0m_2.smiss")) %>% as_tibble() %>% select(IID,MISS1=F_MISS),by=c("IID1"="IID")) %>% left_join(
+    fread(str_c(PROJECT_DIR,"/output/QC0m_2.smiss")) %>% as_tibble() %>% select(IID,MISS2=F_MISS),by=c("IID2"="IID")) %>% 
+  mutate(rmID=if_else(MISS1>MISS2,IID1,IID2)) %>% distinct(rmID) %>% mutate(rmID2=rmID) %>% 
+  bind_rows(read_tsv(str_c(PROJECT_DIR,"/output/rm_multi_kin_commu_2.tsv"),col_names=F) %>% rename(rmID=X1,rmID2=X2)) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/input/rmID_kin_commu_2.tsv"),col_names=F)
+
+read_tsv(str_c(PROJECT_DIR,"/input/rmID_kin_commu_2.tsv"),col_names=F)
+#n=5737
+
+##bash
+plink2 --pfile ${PROJECT_DIR}/tmp/QC3_commu_2 \
+--remove ${PROJECT_DIR}/input/rmID_kin_commu_2.tsv \
+--make-bed \
+--out ${PROJECT_DIR}/input/QC_commu_2 \
+2>&1 | tee ${PROJECT_DIR}/output/log/rm_kinship_commu_2.txt 
+
+plink --bfile ${PROJECT_DIR}/input/QC_commu_2 \
+--make-set 'path/to/high_LD_regions.tsv' \
+--write-set \
+--out ${PROJECT_DIR}/tmp/hild_commu_2
+
+plink2 --bfile ${PROJECT_DIR}/input/QC_commu_2 \
+--extract ${PROJECT_DIR}/tmp/QC3_commu_2.prune.in \
+--exclude ${PROJECT_DIR}/tmp/hild_commu_2.set \
+--pca 10 approx \
+--out ${PROJECT_DIR}/output/QC_commu_2
+
+####GWAS
+##R
+#BirThree
+tPheno <- "Baso"
+# tPheno <- "Eosi"
+
+read_rds(str_c(PROJECT_DIR,"/input/",tPheno,".rds")) %>% 
+  inner_join(read_csv(file='path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),by="TMMID") %>% 
+  filter(igid %in% (read_tsv(str_c(PROJECT_DIR,"/input/QC_BirThree_2.fam"),col_names=F) %>% pluck("X2"))) %>% 
+  inner_join(read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% 
+               mutate(Sex=case_when(Sex=="男性"~2,Sex=="女性"~1,TRUE~-9),Birth=Birth %>% lubridate::ym()) %>% filter(Birth>"1900-01-01")
+             ,by="TMMID") %>% 
+  mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1))) %>% filter(Sex != -9) %>% 
+  arrange(desc(Date)) %>% distinct(TMMID,.keep_all=TRUE) %>% 
+  inner_join(read_table(file=str_c(PROJECT_DIR,"/output/QC_BirThree_2.eigenvec")),by=c("igid"="IID")) %>% 
+  select(IID=igid,Pheno=Val,Age,Sex,PC1,PC2,PC3,PC4,PC5,PC6,PC7,PC8,PC9,PC10) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/input/Pheno_BirThree_2.tsv"))
+
+dtPheno_BirThree_2 <- read_tsv(str_c(PROJECT_DIR,"/input/Pheno_BirThree_2.tsv"))
+
+dtPheno_BirThree_2 %>% 
+  ggplot(aes(x=Pheno)) + geom_histogram(bins=100) + theme_classic()
+
+score <- dtPheno_BirThree_2$Pheno
+ks.test(x=score,y="pnorm",mean=mean(score),sd=sd(score))
+
+dtPheno_BirThree_2 %>% 
+  mutate(Sex=case_when(Sex==1~"female",Sex==2~"male",TRUE~"no sex")) %>% 
+  ggplot(aes(x=Age)) + 
+  geom_histogram(color="black",fill="gray80",binwidth=1) + 
+  labs(x="Age",y="Number of samples") + 
+  scale_y_continuous(expand=c(0,0),limits = c(0,600)) + 
+  facet_wrap(~ Sex) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16),
+        legend.position=c(0.85,0.9),legend.title=element_blank(),legend.title.align=1,
+        legend.text=element_text(size=16),
+        legend.background=element_rect(fill=NA,color=NA),legend.box.background=element_rect(color="black")) 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Age&Sex_BirThree_JPAV2.png"),width=24,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Age&Sex_BirThree_JPAV2.pdf"),device=cairo_pdf,width=24,height=22,units="cm")
+
+##bash
+#SAIGE
+TPHENO=Baso
+# TPHENO=Eosi
+
+singularity exec 'path/to/SAIGE_container.sif' step1_fitNULLGLMM.R \
+--useSparseGRMtoFitNULL=FALSE \
+--plinkFile=${PROJECT_DIR}/input/QC_BirThree_2 \
+--phenoFile=${PROJECT_DIR}/input/Pheno_BirThree_2.tsv \
+--phenoCol=Pheno \
+--covarColList=Age,Sex,PC1,PC2,PC3,PC4,PC5,PC6,PC7,PC8,PC9,PC10 \
+--qCovarColList=Sex \
+--sampleIDColinphenoFile=IID \
+--traitType=quantitative \
+--invNormalize=TRUE \
+--outputPrefix=${PROJECT_DIR}/output/BirThree_2 \
+--IsOverwriteVarianceRatioFile=TRUE \
+--nThreads=40 \
+2>&1 | tee ${PROJECT_DIR}/output/log/SAIGE_step1_BirThree_2.txt 
+
+for CHR in $(seq 1 22)
+do
+
+singularity exec 'path/to/SAIGE_container.sif' step2_SPAtests.R \
+--bedFile=${PROJECT_DIR}/input/QC_BirThree_2.bed \
+--bimFile=${PROJECT_DIR}/input/QC_BirThree_2.bim \
+--famFile=${PROJECT_DIR}/input/QC_BirThree_2.fam \
+--AlleleOrder=ref-first \
+--chrom=${CHR} \
+--minMAF=0 \
+--minMAC=1 \
+--GMMATmodelFile=${PROJECT_DIR}/output/BirThree_2.rda \
+--varianceRatioFile=${PROJECT_DIR}/output/BirThree_2.varianceRatio.txt \
+--LOCO=TRUE \
+--is_output_moreDetails=TRUE \
+--SAIGEOutputFile=${PROJECT_DIR}/tmp/BirThree_2_${CHR}
+
+done
+
+##R
+#commu
+read_rds(str_c(PROJECT_DIR,"/input/",tPheno,".rds")) %>% 
+  inner_join(read_csv(file='path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid),by="TMMID") %>% 
+  filter(igid %in% (read_tsv(str_c(PROJECT_DIR,"/input/QC_commu_2.fam"),col_names=F) %>% pluck("X2"))) %>% 
+  inner_join(read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% 
+               mutate(Sex=case_when(Sex=="男性"~2,Sex=="女性"~1,TRUE~-9),Birth=Birth %>% lubridate::ym()) %>% filter(Birth>"1900-01-01")
+             ,by="TMMID") %>% 
+  mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1))) %>% filter(Sex != -9) %>% 
+  arrange(desc(Date)) %>% distinct(TMMID,.keep_all=TRUE) %>% 
+  inner_join(read_table(file=str_c(PROJECT_DIR,"/output/QC_commu_2.eigenvec")),by=c("igid"="IID")) %>% 
+  select(IID=igid,Pheno=Val,Age,Sex,PC1,PC2,PC3,PC4,PC5,PC6,PC7,PC8,PC9,PC10) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/input/Pheno_commu_2.tsv"))
+
+dtPheno_commu_2 <- read_tsv(str_c(PROJECT_DIR,"/input/Pheno_commu_2.tsv"))
+
+dtPheno_commu_2 %>% 
+  ggplot(aes(x=Pheno)) + geom_histogram(bins=100) + theme_classic()
+
+score <- dtPheno_commu_2$Pheno
+ks.test(x=score,y="pnorm",mean=mean(score),sd=sd(score))
+
+dtPheno_commu_2 %>% 
+  mutate(Sex=case_when(Sex==1~"female",Sex==2~"male",TRUE~"no sex")) %>% 
+  ggplot(aes(x=Age)) + 
+  geom_histogram(color="black",fill="gray80",binwidth=1) + 
+  labs(x="Age",y="Number of samples") + 
+  scale_y_continuous(expand=c(0,0),limits = c(0,1100)) + 
+  facet_wrap(~ Sex) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16),
+        legend.position=c(0.85,0.9),legend.title=element_blank(),legend.title.align=1,
+        legend.text=element_text(size=16),
+        legend.background=element_rect(fill=NA,color=NA),legend.box.background=element_rect(color="black")) 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Age&Sex_commu_JPAV2.png"),width=24,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Age&Sex_commu_JPAV2.pdf"),device=cairo_pdf,width=24,height=22,units="cm")
+
+##bash
+#SAIGE
+singularity exec 'path/to/SAIGE_container.sif' step1_fitNULLGLMM.R \
+--useSparseGRMtoFitNULL=FALSE \
+--plinkFile=${PROJECT_DIR}/input/QC_commu_2 \
+--phenoFile=${PROJECT_DIR}/input/Pheno_commu_2.tsv \
+--phenoCol=Pheno \
+--covarColList=Age,Sex,PC1,PC2,PC3,PC4,PC5,PC6,PC7,PC8,PC9,PC10 \
+--qCovarColList=Sex \
+--sampleIDColinphenoFile=IID \
+--traitType=quantitative \
+--invNormalize=TRUE \
+--outputPrefix=${PROJECT_DIR}/output/commu_2 \
+--IsOverwriteVarianceRatioFile=TRUE \
+--nThreads=50 \
+2>&1 | tee ${PROJECT_DIR}/output/log/SAIGE_step1_commu_2.txt 
+
+for CHR in $(seq 1 22)
+do
+
+singularity exec 'path/to/SAIGE_container.sif' step2_SPAtests.R \
+--bedFile=${PROJECT_DIR}/input/QC_commu_2.bed \
+--bimFile=${PROJECT_DIR}/input/QC_commu_2.bim \
+--famFile=${PROJECT_DIR}/input/QC_commu_2.fam \
+--AlleleOrder=ref-first \
+--chrom=${CHR} \
+--minMAF=0 \
+--minMAC=1 \
+--GMMATmodelFile=${PROJECT_DIR}/output/commu_2.rda \
+--varianceRatioFile=${PROJECT_DIR}/output/commu_2.varianceRatio.txt \
+--LOCO=TRUE \
+--is_output_moreDetails=TRUE \
+--SAIGEOutputFile=${PROJECT_DIR}/tmp/commu_2_${CHR}
+
+done
+
+##R
+tibble(path=dir(str_c(PROJECT_DIR,"/tmp"),full.names=T)) %>% filter(str_detect(path,pattern=".*BirThree_2_[0-9]+$")) %>% 
+  rowwise() %>% mutate(data=list(fread(path) %>% as_tibble())) %>% select(data) %>% unnest(cols=c(data)) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_BirThree_2.tsv"))
+
+tibble(path=dir(str_c(PROJECT_DIR,"/tmp"),full.names=T)) %>% filter(str_detect(path,pattern=".*commu_2_[0-9]+$")) %>% 
+  rowwise() %>% mutate(data=list(fread(path) %>% as_tibble())) %>% select(data) %>% unnest(cols=c(data)) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_commu_2.tsv"))
+
+read_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_BirThree_2.tsv")) %>% arrange(p.value)
+read_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_commu_2.tsv")) %>% arrange(p.value)
+
+TYPE <- "BirThree"
+# TYPE <- "commu"
+
+dtMHT <- read_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_",TYPE,"_2.tsv")) %>% select(SNP=MarkerID,CHR,BP=POS,P=p.value)
+
+maxBP <- dtMHT %>% group_by(CHR) %>% summarise(max=max(BP)) %>% mutate(CHR=CHR+1,max=cumsum(max)) %>% bind_rows(tibble(CHR=1,max=0))
+dtMHT <- dtMHT %>% left_join(maxBP,by="CHR") %>% mutate(mBP=BP+max)
+TickBP <- dtMHT %>% group_by(CHR) %>% summarise(Tick=(min(mBP)+max(mBP))/2) %>% pluck("Tick")
+minX <- (dtMHT$mBP %>% min())
+maxX <- (dtMHT$mBP %>% max())
+
+dtMHT %>% mutate(P_log= -log10(P)) %>%
+  ggplot(aes(x=mBP, y=P_log)) + 
+  geom_point(shape=20,aes(color=as_factor(CHR)),size=2) + 
+  scale_color_manual(values=c(rep(c("gray50","gray70"),11))) + 
+  geom_hline(yintercept= -log10(5*10^-8),color="darkblue",linetype=1,size=0.5) + 
+  ylab(expression(paste(-log[10]," (",italic("p"),")"))) +
+  theme(legend.position = "none",panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title =element_text(size=20),axis.text=element_text(size=18,color="black")) + 
+  scale_x_continuous(name="Chromosome",breaks=unique(TickBP),labels=1:22,limits = c(minX,maxX),expand = c(0.01,0)) + 
+  scale_y_continuous(expand=c(0,0),breaks=seq(from=0,to=50,by=10),limits=c(0,50))
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/MHT_",tPheno,"_",TYPE,"_JPAV2.png"),dpi=600,width=40,height=20,units="cm")
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/MHT_",tPheno,"_",TYPE,"_JPAV2.pdf"),width=40,height=20,units="cm",device=cairo_pdf)
+
+lambdaGC <- ((qchisq(dtMHT$P,1,lower.tail=F) %>% median()) / qchisq(0.5,1)) %>% round(digits=3)
+
+ggplot(dtMHT) + 
+  geom_ribbon(mapping=aes(x=-log10(ppoints(length(P))),ymin=-log10(qbeta(p=0.05/2,shape1=1:length(P),shape2=length(P):1)),
+                          ymax=-log10(qbeta(p=1.95/2,shape1=1:length(P),shape2=length(P):1))),alpha=0.1) +
+  geom_point(aes(x=-log10(ppoints(length(P))),y=-log10(sort(P))),shape=21,size=2,color="darkblue",fill="gray70") + 
+  geom_abline(intercept=0,slope=1,alpha=0.3,size=1) + 
+  annotate("text",x= -Inf,y=Inf,label=str_c("lambda GC = ",lambdaGC),hjust= -.1,vjust=2,size=6) + 
+  theme_classic() + 
+  scale_x_continuous(expand=c(0.01,0)) + 
+  scale_y_continuous(expand=c(0.01,0)) + 
+  labs(x=expression(paste("Expected  ",-log[10]," (",italic("p"),")")),y=expression(paste("Observed  ",-log[10]," (",italic("p"),")"))) +
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.title =element_text(size=18),axis.text=element_text(size=16,color="black"),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"))
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/qq_",tPheno,"_",TYPE,"_JPAV2.png"),dpi=600,width=24,height=24,units="cm")
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/qq_",tPheno,"_",TYPE,"_JPAV2.pdf"),width=24,height=24,units="cm",device=cairo_pdf)

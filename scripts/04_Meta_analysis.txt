@@ -1,0 +1,681 @@
+####Meta-analysis_to_make_discovery_or_replication_data
+library(tidyverse)
+library(data.table)
+
+PROJECT_DIR <- 'path/to/project/directory'
+
+tPheno <- "Baso"
+# tPheno <- "Eosi"
+
+TYPE <- "BirThree"
+# TYPE <- "commu"
+
+read_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_",TYPE,"_2.tsv")) %>% 
+  select(SNV=MarkerID,CHR,BP=POS,BETA,SE,P=p.value,A1=Allele1,A2=Allele2,AF=AF_Allele2) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/tmp/dtMeta_2.tsv"),col_names=T)
+
+read_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_",TYPE,"_3.tsv")) %>% 
+  select(SNV=MarkerID,CHR,BP=POS,BETA,SE,P=p.value,A1=Allele1,A2=Allele2,AF=AF_Allele2) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/tmp/dtMeta_3.tsv"),col_names=T)
+
+##bash
+export PROJECT_DIR='path/to/project/directory'
+
+export TPHENO=Baso
+# export TPHENO=Eosi
+
+export TYPE=BirThree
+# export TYPE=commu
+
+module load metal/2011-03-25
+
+cd ${PROJECT_DIR}/tmp
+metal < ${PROJECT_DIR}/resurces/Meta_script.txt
+
+chmod 750 ${PROJECT_DIR}/tmp/METAANALYSIS1.TBL
+cp ${PROJECT_DIR}/tmp/METAANALYSIS1.TBL ${PROJECT_DIR}/output/META_${TPHENO}_${TYPE}.TBL
+
+rm ${PROJECT_DIR}/tmp/dtMeta_2.tsv
+rm ${PROJECT_DIR}/tmp/dtMeta_3.tsv
+rm ${PROJECT_DIR}/tmp/METAANALYSIS1.TBL
+
+####make_MHT&QQ_plots
+##R
+library(tidyverse)
+library(patchwork)
+
+tPheno <- "Baso"
+# tPheno <- "Eosi"
+
+TYPE <- "BirThree"
+# TYPE <- "commu"
+
+dtMHT <- read_tsv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_",TYPE,".TBL")) %>% 
+  filter((Direction == "++" | Direction == "--") | HetPVal >= 0.05) %>% 
+  filter(!(str_detect(Direction,pattern = "\\?"))) %>%
+  mutate(CHR=str_extract(MarkerName,pattern = "^[0-9]+(?=:)") %>% as.numeric()) %>% 
+  mutate(BP=str_extract(MarkerName,pattern = "(?<=:)[0-9]*(?=_)") %>% as.numeric()) %>% 
+  select(CHR,BP,P=`P-value`)
+
+maxBP <- dtMHT %>% group_by(CHR) %>% summarise(max=max(BP)) %>% mutate(CHR=CHR+1,max=cumsum(max)) %>% bind_rows(tibble(CHR=1,max=0))
+dtMHT <- dtMHT %>% left_join(maxBP,by="CHR") %>% mutate(mBP=BP+max)
+TickBP <- dtMHT %>% group_by(CHR) %>% summarise(Tick=(min(mBP)+max(mBP))/2) %>% pluck("Tick")
+minX <- (dtMHT$mBP %>% min())
+maxX <- (dtMHT$mBP %>% max())
+
+#Baso
+dtCol <- dtMHT %>% 
+  mutate(P_log= -log10(P)) %>% 
+  mutate(col = case_when(
+    CHR == 1 & 87651233 <= BP & BP <= 87802675 ~ 23, 
+    CHR == 1 & 198700442 <= BP & BP <= 199012478 ~ 23, 
+    CHR == 1 & 205541408 <= BP & BP <= 205808013 ~ 23,
+    CHR == 2 & 145306433 <= BP & BP <= 145597356 ~ 23, 
+    CHR == 3 & 3086195 <= BP & BP <= 3238947 ~ 23, 
+    CHR == 3 & 127948538 <= BP & BP <= 128885815 ~ 23, 
+    CHR == 3 & 194120567 <= BP & BP <= 194128835 ~ 23, 
+    CHR == 4 & 87856673 <= BP & BP <= 88173692 ~ 23, 
+    CHR == 5 & 49893347 <= BP & BP <= 50152455 ~ 23, 
+    CHR == 6 & 29412222 <= BP & BP <= 35253806 ~ 23, 
+    CHR == 8 & 119095507 <= BP & BP <= 119172120 ~ 23, 
+    CHR == 8 & 130584161 <= BP & BP <= 130691798 ~ 23, 
+    CHR == 10 & 89616479 <= BP & BP <= 89656156 ~ 23, 
+    CHR == 11 & 61543499 <= BP & BP <= 61604814 ~ 23, 
+    CHR == 11 & 89160240 <= BP & BP <= 90040020 ~ 23, 
+    CHR == 12 & 66685623 <= BP & BP <= 66772766 ~ 23, 
+    CHR == 14 & 23566143 <= BP & BP <= 23600023 ~ 23, 
+    CHR == 15 & 50357743 <= BP & BP <= 50406183 ~ 23, 
+    CHR == 16 & 88520452 <= BP & BP <= 88531861 ~ 23, 
+    CHR == 19 & 33748762 <= BP & BP <= 33762301 ~ 23, 
+    CHR == 19 & 52245178 <= BP & BP <= 52249211 ~ 23, 
+    CHR == 20 & 31213647 <= BP & BP <= 31324433 ~ 23, 
+    CHR == 21 & 36280897 <= BP & BP <= 36280897 ~ 23, 
+    CHR == 21 & 39835126 <= BP & BP <= 40028109 ~ 23, 
+    CHR == 22 & 37265172 <= BP & BP <= 37320500 ~ 23, 
+    TRUE ~ as.numeric(CHR))) 
+
+#Eosi
+dtCol <- dtMHT %>% 
+  mutate(P_log= -log10(P)) %>% 
+  mutate(col = case_when(
+    CHR == 1 & 150544093 <= BP & BP <= 150584103 ~ 23, 
+    CHR == 1 & 154839425 <= BP & BP <= 156018083 ~ 23, 
+    CHR == 2 & 102917239 <= BP & BP <= 103208610 ~ 23,
+    CHR == 2 & 213816631 <= BP & BP <= 213981760 ~ 23, 
+    CHR == 2 & 242691021 <= BP & BP <= 242703937 ~ 23, 
+    CHR == 3 & 33043173 <= BP & BP <= 33138777 ~ 23, 
+    CHR == 3 & 128196500 <= BP & BP <= 128757560 ~ 23, 
+    CHR == 4 & 83540096 <= BP & BP <= 83586002 ~ 23, 
+    CHR == 5 & 131890471 <= BP & BP <= 133529396 ~ 23, 
+    CHR == 6 & 514991 <= BP & BP <= 536071 ~ 23, 
+    CHR == 6 & 25187291 <= BP & BP <= 33842091 ~ 23, 
+    CHR == 6 & 135259371 <= BP & BP <= 135490468 ~ 23, 
+    CHR == 7 & 20489873 <= BP & BP <= 20636508 ~ 23, 
+    CHR == 7 & 92305445 <= BP & BP <= 92484093 ~ 23, 
+    CHR == 10 & 9064955 <= BP & BP <= 9074903 ~ 23, 
+    CHR == 10 & 64344371 <= BP & BP <= 65559266 ~ 23, 
+    CHR == 11 & 76293726 <= BP & BP <= 76299194 ~ 23, 
+    CHR == 11 & 107997908 <= BP & BP <= 108337137 ~ 23, 
+    CHR == 16 & 27340735 <= BP & BP <= 27360628 ~ 23, 
+    CHR == 17 & 65825248 <= BP & BP <= 66098154 ~ 23, 
+    CHR == 17 & 68264096 <= BP & BP <= 68311680 ~ 23, 
+    CHR == 18 & 45324584 <= BP & BP <= 45473449 ~ 23, 
+    CHR == 19 & 3180803 <= BP & BP <= 3188897 ~ 23, 
+    CHR == 19 & 40173502 <= BP & BP <= 40245690 ~ 23, 
+    CHR == 22 & 37265172 <= BP & BP <= 37320500 ~ 23, 
+    TRUE ~ as.numeric(CHR))) 
+
+dtCol%>% arrange(col) %>% 
+  ggplot(aes(x=mBP, y=P_log)) + 
+  geom_point(shape=20,aes(color=as_factor(col)),size=2) + 
+  scale_color_manual(values=c(rep(c("gray50","gray70"),11), "darkorange")) + 
+  geom_hline(yintercept= -log10(5*10^-8),color="darkblue",linetype=1,size=0.5) + 
+  ylab(expression(paste(-log[10]," (",italic("p"),")"))) +
+  theme(legend.position = "none",panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title =element_text(size=20),axis.text=element_text(size=18,color="black")) + 
+  scale_x_continuous(name="Chromosome",breaks=unique(TickBP),labels=1:22,limits = c(minX,maxX),expand = c(0.01,0)) + 
+  scale_y_continuous(expand=c(0,0))
+
+p_upper <- dtCol %>% 
+  arrange(col) %>% 
+  mutate(P_log= -log10(P)) %>% 
+  ggplot(aes(x=mBP, y=P_log)) + 
+  geom_point(shape=20,aes(color=as_factor(col)),size=2) + 
+  scale_color_manual(values=c(rep(c("gray50","gray70"),11), "darkorange")) + 
+  scale_x_continuous(expand = c(0.01,0),limits = c(minX,maxX)) + 
+  scale_y_continuous(expand = c(0,0),breaks=seq(from=50,to=200,by=150),limits=c(50,200)) + #Baso_commu
+  # scale_y_continuous(expand = c(0,0),breaks=seq(from=30,to=100,by=70),limits=c(30,100)) + #Baso_BirThree
+  # scale_y_continuous(expand = c(0,0),breaks=seq(from=30,to=70,by=40),limits=c(30,70)) + #Eosi_commu
+  theme(legend.position = "none",panel.grid.major=element_blank(),panel.grid.minor=element_blank(),
+        panel.background=element_blank(),
+        axis.line.x = element_blank() ,axis.line.y=element_line(color="black"),
+        axis.ticks.x = element_blank(),axis.ticks.y=element_line(color="black"),
+        axis.title =element_blank(),
+        axis.text.x=element_blank(),axis.text.y=element_text(size=18,color="black"))
+
+p_bottom <- dtCol %>% 
+  arrange(col) %>% 
+  mutate(P_log= -log10(P)) %>%
+  ggplot(aes(x=mBP, y=P_log)) + 
+  geom_point(shape=20,aes(color=as_factor(col)),size=2) + 
+  scale_color_manual(values=c(rep(c("gray50","gray70"),11), "darkorange")) + 
+  geom_hline(yintercept= -log10(5*10^-8),color="darkblue",linetype=1,size=0.5) + 
+  scale_x_continuous(expand = c(0.01,0),name="Chromosome",breaks=unique(TickBP),labels=1:22,limits = c(minX,maxX)) + 
+  # scale_y_continuous(expand=c(0,0),breaks=seq(from=0,to=35,by=5),limits=c(0,35)) + #Eosi_BirThree
+  scale_y_continuous(expand=c(0,0),breaks=seq(from=0,to=50,by=10),limits=c(0,50)) + #Baso_commu
+  # scale_y_continuous(expand=c(0,0),breaks=seq(from=0,to=30,by=5),limits=c(0,30)) + #Eosi_commu
+  # scale_y_continuous(expand=c(0,0),breaks=seq(from=0,to=30,by=5),limits=c(0,30)) + #Baso_BirThree
+  ylab(expression(paste(-log[10]," (",italic("p"),")"))) +
+  theme(legend.position = "none",panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),
+        axis.ticks.x = element_blank(),axis.ticks.y=element_line(color="black"),
+        axis.title =element_text(size=20),
+        axis.text=element_text(size=18,color="black")) 
+
+p_upper + p_bottom +
+  plot_layout(ncol = 1, heights = c(1,5))
+
+# p_bottom
+
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/MHT_",tPheno,"_",TYPE,"_meta.png"),dpi=600,width=40,height=20,units="cm")
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/MHT_",tPheno,"_",TYPE,"_meta.pdf"),width=40,height=20,units="cm",device=cairo_pdf)
+
+lambdaGC <- ((qchisq(dtMHT$P,1,lower.tail=F) %>% median()) / qchisq(0.5,1)) %>% round(digits=3)
+lambda1000 <- (1 + (lambdaGC -1) * 1000 / 37968) #commu
+# lambda1000 <- (1 + (lambdaGC -1) * 1000 / 26520) #BirThree
+
+ggplot(dtMHT) + 
+  geom_ribbon(mapping=aes(x=-log10(ppoints(length(P))),ymin=-log10(qbeta(p=0.05/2,shape1=1:length(P),shape2=length(P):1)),
+                          ymax=-log10(qbeta(p=1.95/2,shape1=1:length(P),shape2=length(P):1))),alpha=0.1) +
+  geom_point(aes(x=-log10(ppoints(length(P))),y=-log10(sort(P))),shape=21,size=2,color="darkblue",fill="gray70") + 
+  geom_abline(intercept=0,slope=1,alpha=0.3,size=1) + 
+  theme_classic() + 
+  scale_x_continuous(expand=c(0.01,0)) + 
+  scale_y_continuous(expand=c(0.01,0)) + 
+  labs(x=expression(paste("Expected  ",-log[10]," (",italic("p"),")")),y=expression(paste("Observed  ",-log[10]," (",italic("p"),")"))) +
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.title =element_text(size=18),axis.text=element_text(size=16,color="black"),axis.line=element_line(color="black"),axis.ticks=element_line(color="black"))
+
+lambdaGC
+lambda1000
+
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/qq_",tPheno,"_",TYPE,"_meta.png"),dpi=600,width=24,height=24,units="cm")
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/qq_",tPheno,"_",TYPE,"_meta.pdf"),width=24,height=24,units="cm",device=cairo_pdf)
+
+####combined_Meta-analysis
+##R
+tPheno <- "Baso"
+# tPheno <- "Eosi"
+
+read_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_BirThree_2.tsv")) %>% 
+  select(SNV=MarkerID,CHR,BP=POS,BETA,SE,P=p.value,A1=Allele1,A2=Allele2,AF=AF_Allele2) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/tmp/dtMeta_2b.tsv"),col_names=T)
+
+read_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_BirThree_3.tsv")) %>% 
+  select(SNV=MarkerID,CHR,BP=POS,BETA,SE,P=p.value,A1=Allele1,A2=Allele2,AF=AF_Allele2) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/tmp/dtMeta_3b.tsv"),col_names=T)
+
+read_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_commu_2.tsv")) %>% 
+  select(SNV=MarkerID,CHR,BP=POS,BETA,SE,P=p.value,A1=Allele1,A2=Allele2,AF=AF_Allele2) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/tmp/dtMeta_2c.tsv"),col_names=T)
+
+read_tsv(str_c(PROJECT_DIR,"/output/GWAS_",tPheno,"_commu_3.tsv")) %>% 
+  select(SNV=MarkerID,CHR,BP=POS,BETA,SE,P=p.value,A1=Allele1,A2=Allele2,AF=AF_Allele2) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/tmp/dtMeta_3c.tsv"),col_names=T)
+
+##bash
+export TPHENO=Baso
+# export TPHENO=Eosi
+
+module load metal/2011-03-25
+
+cd ${PROJECT_DIR}/tmp
+metal < ${PROJECT_DIR}/resources/Meta_all_script.txt
+
+chmod 750 ${PROJECT_DIR}/tmp/METAANALYSIS1.TBL
+cp ${PROJECT_DIR}/tmp/METAANALYSIS1.TBL ${PROJECT_DIR}/output/META_${TPHENO}_all.TBL
+
+rm ${PROJECT_DIR}/tmp/dtMeta_2b.tsv
+rm ${PROJECT_DIR}/tmp/dtMeta_3b.tsv
+rm ${PROJECT_DIR}/tmp/dtMeta_2c.tsv
+rm ${PROJECT_DIR}/tmp/dtMeta_3c.tsv
+rm ${PROJECT_DIR}/tmp/METAANALYSIS1.TBL
+
+####make_MHT&QQ_plots
+##R
+library(tidyverse)
+library(patchwork)
+
+tPheno <- "Baso"
+# tPheno <- "Eosi"
+
+dtMHT <- read_tsv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_all.TBL")) %>% 
+  filter((Direction == "++++" | Direction == "----") | HetPVal >= 0.05) %>% 
+  filter(!(str_detect(Direction,pattern = "\\?"))) %>%
+  mutate(CHR=str_extract(MarkerName,pattern = "^[0-9]+(?=:)") %>% as.numeric()) %>% 
+  mutate(BP=str_extract(MarkerName,pattern = "(?<=:)[0-9]*(?=_)") %>% as.numeric()) %>% 
+  select(CHR,BP,P=`P-value`)
+dtMHT %>% arrange(P)
+maxBP <- dtMHT %>% group_by(CHR) %>% summarise(max=max(BP)) %>% mutate(CHR=CHR+1,max=cumsum(max)) %>% 
+  bind_rows(tibble(CHR=1,max=0))
+dtMHT <- dtMHT %>% left_join(maxBP,by="CHR") %>% mutate(mBP=BP+max)
+TickBP <- dtMHT %>% group_by(CHR) %>% summarise(Tick=(min(mBP)+max(mBP))/2) %>% pluck("Tick")
+minX <- min(dtMHT$mBP)
+maxX <- max(dtMHT$mBP)
+
+#Baso
+dtCol <- dtMHT %>% 
+  mutate(P_log= -log10(P)) %>% 
+  mutate(col = case_when(
+    CHR == 1 & 87651233 <= BP & BP <= 87802675 ~ 23, 
+    CHR == 1 & 198700442 <= BP & BP <= 199012478 ~ 23, 
+    CHR == 1 & 205541408 <= BP & BP <= 205808013 ~ 23,
+    CHR == 2 & 145306433 <= BP & BP <= 145597356 ~ 23, 
+    CHR == 3 & 3086195 <= BP & BP <= 3238947 ~ 23, 
+    CHR == 3 & 127948538 <= BP & BP <= 128885815 ~ 24, 
+    CHR == 3 & 194120567 <= BP & BP <= 194128835 ~ 23, 
+    CHR == 4 & 87856673 <= BP & BP <= 88173692 ~ 23, 
+    CHR == 5 & 49893347 <= BP & BP <= 50152455 ~ 23, 
+    CHR == 6 & 29412222 <= BP & BP <= 35253806 ~ 23, 
+    CHR == 8 & 119095507 <= BP & BP <= 119172120 ~ 23, 
+    CHR == 8 & 130584161 <= BP & BP <= 130691798 ~ 23, 
+    CHR == 10 & 89616479 <= BP & BP <= 89656156 ~ 23, 
+    CHR == 11 & 61543499 <= BP & BP <= 61604814 ~ 23, 
+    CHR == 11 & 89160240 <= BP & BP <= 90040020 ~ 23, 
+    CHR == 12 & 66685623 <= BP & BP <= 66772766 ~ 23, 
+    CHR == 14 & 23566143 <= BP & BP <= 23600023 ~ 23, 
+    CHR == 15 & 50357743 <= BP & BP <= 50406183 ~ 23, 
+    CHR == 16 & 88520452 <= BP & BP <= 88531861 ~ 23, 
+    CHR == 19 & 33748762 <= BP & BP <= 33762301 ~ 23, 
+    CHR == 19 & 52245178 <= BP & BP <= 52249211 ~ 23, 
+    CHR == 20 & 31213647 <= BP & BP <= 31324433 ~ 23, 
+    CHR == 21 & 36280897 <= BP & BP <= 36280897 ~ 23, 
+    CHR == 21 & 39835126 <= BP & BP <= 40028109 ~ 23, 
+    CHR == 22 & 37265172 <= BP & BP <= 37320500 ~ 23, 
+    TRUE ~ as.numeric(CHR))) 
+
+#Eosi
+dtCol <- dtMHT %>% 
+  mutate(P_log= -log10(P)) %>% 
+  mutate(col = case_when(
+    CHR == 1 & 150544093 <= BP & BP <= 150584103 ~ 23, 
+    CHR == 1 & 154839425 <= BP & BP <= 156018083 ~ 23, 
+    CHR == 2 & 102917239 <= BP & BP <= 103208610 ~ 23,
+    CHR == 2 & 213816631 <= BP & BP <= 213981760 ~ 23, 
+    CHR == 2 & 242691021 <= BP & BP <= 242703937 ~ 23, 
+    CHR == 3 & 33043173 <= BP & BP <= 33138777 ~ 23, 
+    CHR == 3 & 128196500 <= BP & BP <= 128757560 ~ 24, 
+    CHR == 4 & 83540096 <= BP & BP <= 83586002 ~ 23, 
+    CHR == 5 & 131890471 <= BP & BP <= 133529396 ~ 23, 
+    CHR == 6 & 514991 <= BP & BP <= 536071 ~ 23, 
+    CHR == 6 & 25187291 <= BP & BP <= 33842091 ~ 23, 
+    CHR == 6 & 135259371 <= BP & BP <= 135490468 ~ 23, 
+    CHR == 7 & 20489873 <= BP & BP <= 20636508 ~ 23, 
+    CHR == 7 & 92305445 <= BP & BP <= 92484093 ~ 23, 
+    CHR == 10 & 9064955 <= BP & BP <= 9074903 ~ 23, 
+    CHR == 10 & 64344371 <= BP & BP <= 65559266 ~ 23, 
+    CHR == 11 & 76293726 <= BP & BP <= 76299194 ~ 23, 
+    CHR == 11 & 107997908 <= BP & BP <= 108337137 ~ 23, 
+    CHR == 16 & 27340735 <= BP & BP <= 27360628 ~ 23, 
+    CHR == 17 & 65825248 <= BP & BP <= 66098154 ~ 23, 
+    CHR == 17 & 68264096 <= BP & BP <= 68311680 ~ 23, 
+    CHR == 18 & 45324584 <= BP & BP <= 45473449 ~ 23, 
+    CHR == 19 & 3180803 <= BP & BP <= 3188897 ~ 23, 
+    CHR == 19 & 40173502 <= BP & BP <= 40245690 ~ 23, 
+    CHR == 22 & 37265172 <= BP & BP <= 37320500 ~ 23, 
+    TRUE ~ as.numeric(CHR))) 
+
+p_upper <- dtCol %>% 
+  mutate(P_log= -log10(P)) %>%
+  arrange(col, mBP) %>% 
+  ggplot(aes(x=mBP, y=P_log)) + 
+  geom_point(shape=20,aes(color=as_factor(col)),size=2) + 
+  scale_color_manual(values=c(rep(c("gray50","gray70"),11),"darkorange","darkred")) + 
+  scale_x_continuous(expand = c(0.01,0),limits = c(minX,maxX)) + 
+  scale_y_continuous(expand = c(0,0),breaks=seq(from=70,to=300,by=230),limits=c(70,300)) + #Baso
+  # scale_y_continuous(expand = c(0,0),breaks=seq(from=30,to=130,by=70),limits=c(30,100)) + #Eosi
+  ylab(expression(paste(-log[10]," (",italic("p"),")"))) +
+  theme(legend.position = "none",panel.grid.major=element_blank(),panel.grid.minor=element_blank(),
+        panel.background=element_blank(),
+        axis.line.x = element_blank() ,axis.line.y=element_line(color="black"),
+        axis.ticks.x = element_blank(),axis.ticks.y=element_line(color="black"),
+        axis.title =element_blank(),
+        axis.text.x=element_blank(),axis.text.y=element_text(size=22,color="black"))
+
+p_bottom <- dtCol %>% 
+  mutate(P_log= -log10(P)) %>%
+  arrange(col, mBP) %>% 
+  ggplot(aes(x=mBP, y=P_log)) + 
+  geom_point(shape=20,aes(color=as_factor(col)),size=2) + 
+  scale_color_manual(values=c(rep(c("gray50","gray70"),11),"darkorange","darkred")) + 
+  geom_hline(yintercept= -log10(5*10^-8),color="darkblue",linetype=1,size=0.5) + 
+  scale_x_continuous(expand = c(0.01,0),name="Chromosome",breaks=unique(TickBP),labels=1:22,limits = c(minX,maxX)) +
+  scale_y_continuous(expand=c(0,0),breaks=seq(from=0,to=70,by=10),limits=c(0,70)) + #Baso
+  # scale_y_continuous(expand=c(0,0),breaks=seq(from=0,to=30,by=5),limits=c(0,30)) + #Eosi
+  ylab(expression(paste(-log[10]," (",italic("p"),")"))) +
+  theme(legend.position = "none",panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),
+        axis.ticks.x = element_blank(),axis.ticks.y=element_line(color="black"),
+        axis.title =element_text(size=24),
+        axis.text=element_text(size=22,color="black")) 
+
+p_upper + p_bottom + 
+  plot_layout(ncol = 1, heights = c(1,5), axes = "collect_y", axis_titles = "collect_y")
+
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/MHT_",tPheno,"_all_meta.png"),dpi=600,width=40,height=20,units="cm")
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/MHT_",tPheno,"_all_meta.pdf"),width=40,height=20,units="cm",device=cairo_pdf)
+
+lambdaGC <- ((qchisq(dtMHT$P,1,lower.tail=F) %>% median()) / qchisq(0.5,1)) %>% round(digits=3)
+lambda1000 <- (1 + (lambdaGC -1) * 1000 / 64488)
+
+ggplot(dtMHT) + 
+  geom_ribbon(mapping=aes(x=-log10(ppoints(length(P))),ymin=-log10(qbeta(p=0.05/2,shape1=1:length(P),shape2=length(P):1)),
+                          ymax=-log10(qbeta(p=1.95/2,shape1=1:length(P),shape2=length(P):1))),alpha=0.1) +
+  geom_point(aes(x=-log10(ppoints(length(P))),y=-log10(sort(P))),shape=21,size=2,color="darkblue",fill="gray70") + 
+  geom_abline(intercept=0,slope=1,alpha=0.3,size=1) + 
+  theme_classic() + 
+  scale_x_continuous(expand=c(0.01,0)) + 
+  scale_y_continuous(expand=c(0.01,0)) + 
+  labs(x=expression(paste("Expected  ",-log[10]," (",italic("p"),")")),y=expression(paste("Observed  ",-log[10]," (",italic("p"),")"))) +
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.title =element_text(size=24),axis.text=element_text(size=22,color="black"),axis.line=element_line(color="black"),axis.ticks=element_line(color="black"))
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/qq_",tPheno,"_all_meta.png"),dpi=600,width=22,height=22,units="cm")
+ggsave(filename=str_c(PROJECT_DIR,"/output/figs/qq_",tPheno,"_all_meta.pdf"),width=22,height=22,units="cm",device=cairo_pdf)
+
+####make_the_lists_of_lead_variants
+##R
+tPheno <- "Baso"
+# tPheno <- "Eosi"
+
+dtRep <-
+  read_tsv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_BirThree.TBL")) %>%
+  rowwise() %>% 
+  filter((Direction == "++" | Direction == "--") | HetPVal >= 0.05) %>%
+  filter(!(str_detect(Direction,pattern = "\\?"))) %>%
+  mutate(EArep = toupper(Allele1)) %>% 
+  mutate(EAFrep = Freq1) %>% 
+  mutate(BETArep = Effect) %>% 
+  mutate(SErep = StdErr) %>% 
+  select(MarkerName,EArep,EAFrep,BETArep,SErep,Direction_rep=Direction,Prep=`P-value`)
+
+dtCom <- 
+  read_tsv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_all.TBL")) %>% 
+  rowwise() %>% 
+  filter(!(str_detect(Direction,pattern = "\\?"))) %>%
+  mutate(EAcom = toupper(Allele1)) %>% 
+  mutate(EAFcom = Freq1) %>% 
+  mutate(BETAcom = Effect) %>% 
+  mutate(SEcom = StdErr) %>% 
+  select(MarkerName,EAcom,EAFcom,BETAcom,SEcom,Direction_com=Direction,HetPVal, Pcom=`P-value`)
+
+read_tsv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_commu.TBL")) %>%
+  rowwise() %>% 
+  filter((Direction == "++" | Direction == "--") | HetPVal >= 0.05) %>%
+  filter(!(str_detect(Direction,pattern = "\\?"))) %>%
+  mutate(CHR=str_extract(MarkerName,pattern = "^[0-9]+(?=:)") %>% as.numeric()) %>%
+  mutate(BP=str_extract(MarkerName,pattern = "(?<=:)[0-9]*(?=_)") %>% as.numeric()) %>%
+  mutate(EA = toupper(Allele1)) %>% 
+  mutate(OA = toupper(Allele2)) %>% 
+  mutate(REF = str_split(MarkerName, pattern = "_")[[1]][2]) %>% 
+  mutate(EAFdis = Freq1) %>% 
+  mutate(BETAdis = Effect) %>% 
+  mutate(SEdis = StdErr) %>% 
+  select(MarkerName,CHR,BP,EA,OA,REF,EAFdis,BETAdis,SEdis,Direction_dis=Direction,Pdis=`P-value`) %>% 
+  filter(Pdis < 5 * 10^-8) %>% 
+  arrange(CHR,BP) %>% write_csv(str_c(PROJECT_DIR,"/tmp/Discovery_",tPheno,"_group.csv"))
+
+#Variants_within_300kb_of_each_other_are_grouped
+
+dtGroup <- read_csv(str_c(PROJECT_DIR,"/tmp/Discovery_",tPheno,"_group.csv")) %>% 
+  group_by(group) %>% summarise(minBP = min(BP), maxBP= max(BP), minPdis = min(Pdis))
+
+read_csv(str_c(PROJECT_DIR,"/tmp/Discovery_",tPheno,"_group.csv")) %>% 
+  left_join(dtGroup, by = "group") %>% 
+  filter(Pdis == minPdis) %>% 
+  left_join(dtRep, by = "MarkerName") %>% 
+  filter(Prep < 0.05/35) %>% select(-minPdis) %>% #Baso
+  # filter(Prep < 0.05/30) %>% select(-minPdis) %>% #Eosi
+  mutate(FLIPrep = if_else(EA == EArep, F, T)) %>% 
+  mutate(BETArep = if_else(EA == EArep, BETArep, -BETArep)) %>% 
+  mutate(EAFrep = if_else(EA == EArep, EAFrep, (1-EAFrep))) %>% 
+  left_join(dtCom, by = "MarkerName") %>% 
+  mutate(FLIPcom = if_else(EA == EAcom, F, T)) %>% 
+  mutate(BETAcom = if_else(EA == EAcom, BETAcom, -BETAcom)) %>% 
+  mutate(EAFcom = if_else(EA == EAcom, EAFcom, (1-EAFcom))) %>% 
+  select(MarkerName,CHR,BP,EA,OA,REF,EAFdis,BETAdis,SEdis,Pdis,EAFrep,BETArep,SErep,Prep,EAFcom,BETAcom,SEcom,Pcom,
+         Direction_dis,Direction_rep,Direction_com,HetPVal,minBP,maxBP,FLIPrep,FLIPcom) %>% 
+  write_csv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_sig_anno.csv"))
+
+loci_color <- read_csv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_sig_anno.csv")) %>% 
+  select(CHR,minBP,maxBP)
+
+read_csv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_sig_anno.csv")) %>% 
+  group_by(CHR) %>% summarise(n = n()) %>% filter(n>1)
+
+#Chromosome_numbers_with_multiple_candidate_lead_variants
+#Baso;1,3,6,8,11,19,21
+#Eosi;1,2,3,6,7,10,11,17,19
+
+read_csv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_sig_anno.csv")) %>% 
+  filter(CHR == 1) %>% select(MarkerName) %>% 
+  write_tsv(str_c(PROJECT_DIR,"/tmp/Baso_LD_1.tsv"), col_names = F)
+# write_tsv(str_c(PROJECT_DIR,"/tmp/Eosi_LD_19.tsv"), col_names = F)
+
+##bash
+module load plink/20210606
+module load plink2/20220302
+
+CHR=1
+
+plink2 \
+--bfile 'path/to/8.3k_JPN_whole_genome_sequence_data_of_chromosome${CHR}' \
+--make-bed \
+--out ${PROJECT_DIR}/tmp/ref
+
+plink --bfile ${PROJECT_DIR}/tmp/ref \
+--extract ${PROJECT_DIR}/tmp/Baso_LD_${CHR}.tsv \
+--r2 \
+--ld-window 999999 \
+--ld-window-kb 1000000 \
+--ld-window-r2 0 \
+--out ${PROJECT_DIR}/output/ld_baso_chr${CHR}
+
+plink --bfile ${PROJECT_DIR}/tmp/ref \
+--extract ${PROJECT_DIR}/tmp/Eosi_LD_${CHR}.tsv \
+--r2 \
+--ld-window 999999 \
+--ld-window-kb 1000000 \
+--ld-window-r2 0 \
+--out ${PROJECT_DIR}/output/ld_eosi_chr${CHR}
+
+##R
+read_tsv(str_c(PROJECT_DIR,"/output/ld_baso_chr1.ld"))
+read_tsv(str_c(PROJECT_DIR,"/output/ld_eosi_chr19.ld"))
+
+#R2>=0.01; Baso; 6:29527267_C_A & 6:34518271_G_A 
+#R2>=0.01; Eosi; none
+
+#edit_manually_'META_${TPHENO}_sig_anno.csv'
+read_csv(str_c(PROJECT_DIR,"/output/META_Baso_n_sig_anno_r2.csv"))
+read_csv(str_c(PROJECT_DIR,"/output/META_Eosi_n_sig_anno_r2.csv"))
+
+####regional_plots_by_LocusZoom
+tPheno <- "Baso"
+# tPheno <- "Eosi"
+
+read_csv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_sig_anno_r2.csv")) %>% 
+  select(MarkerName) %>% write_tsv(str_c(PROJECT_DIR,"/tmp/tSNV_",tPheno,".tsv"),col_names = F)
+
+read_tsv(str_c(PROJECT_DIR,"/tmp/tSNV_",tPheno,".tsv"),col_names = F)
+
+#${PROJECT_DIR}/cmd/inclSNVs.R
+#
+
+##bash
+module load plink/20210606
+module load plink2/20220302
+module load python2.7/2.7.18
+module load R/3.6.3
+module load R36-recommended/20220404
+module load samtools/1.9
+module load locuszoom/1.4
+
+while read TSNV
+do
+
+CHR=$(echo $TSNV | cut -d':' -f1)
+BP=$(echo $TSNV | cut -d':' -f2 | cut -d'_' -f1)
+START=$((BP - 200000))
+END=$((BP + 200000))
+
+Rscript ${PROJECT_DIR}/resources/inclSNVs.R ${PROJECT_DIR} ${TPHENO} ${CHR} ${START} ${END}
+
+plink2 \
+--bfile 'path/to/8.3k_JPN_whole_genome_sequence_data_of_chromosome${CHR}' \
+--extract ${PROJECT_DIR}/tmp/inclSNVs.tsv \
+--make-bed \
+--out ${PROJECT_DIR}/tmp/ref
+
+plink2 \
+--bfile ${PROJECT_DIR}/output/QC \
+--extract ${PROJECT_DIR}/tmp/inclSNVs.tsv \
+--make-bed \
+--out ${PROJECT_DIR}/tmp/ref
+
+plink --bfile ${PROJECT_DIR}/tmp/ref \
+--r2 \
+--ld-window 500000 \
+--ld-window-r2 0 \
+--ld-snp ${TSNV} \
+--out ${PROJECT_DIR}/tmp/R2
+
+Rscript ${PROJECT_DIR}/resources/LD.R ${PROJECT_DIR} ${TPHENO}
+
+cd ${PROJECT_DIR}/output/locuszoom/${TPHENO}/
+  
+  locuszoom --metal ${PROJECT_DIR}/tmp/META.TBL \
+--refsnp ${TSNV} \
+--start ${START} \
+--end ${END} \
+--ld ${PROJECT_DIR}/tmp/LD \
+--build hg19
+
+rm ${PROJECT_DIR}/tmp/ref*
+  rm ${PROJECT_DIR}/tmp/R2.ld
+rm ${PROJECT_DIR}/tmp/META.TBL
+rm ${PROJECT_DIR}/tmp/LD
+rm ${PROJECT_DIR}/tmp/inclSNVs.tsv
+
+done < ${PROJECT_DIR}/tmp/tSNV_${TPHENO}.tsv
+
+####Generation_of_an_age_distribution_plot
+#Commu
+tPheno <- "Baso"
+# tPheno <- "Eosi"
+
+dtCommu <- read_rds(str_c(PROJECT_DIR,"/input/",tPheno,".rds")) %>% inner_join(
+  bind_rows(
+    read_delim(str_c(PROJECT_DIR,"/tmp/QC0_2.fam"), delim = " ", col_names = F),
+    read_delim(str_c(PROJECT_DIR,"/tmp/QC0_3.fam"), delim = " ", col_names = F)) %>% 
+    rename(igid = X1) %>% distinct(igid) %>% left_join(
+      bind_rows(
+        read_csv(file='path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid), 
+        read_csv(file='path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% 
+        distinct(TMMID, .keep_all = T), by = "igid"),
+  by = "TMMID") %>% 
+  filter(!(igid %in% (read_tsv(str_c(PROJECT_DIR,"/tmp/BirThree_igid.tsv"), col_names = F) %>% drop_na("X1") %>% pluck("X1")))) %>% 
+  inner_join(
+    read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% 
+      mutate(Sex=case_when(Sex=="男性"~2,Sex=="女性"~1,TRUE~-9),Birth=Birth %>% lubridate::ym()) %>% filter(Birth>"1900-01-01")
+    ,by="TMMID") %>% 
+  mutate(Date = lubridate::ymd(Date)) %>% 
+  mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1))) %>% filter(Sex != -9) %>% 
+  arrange(desc(Date)) %>% distinct(TMMID,.keep_all=TRUE)
+
+dtCommu %>% mutate(Sex = if_else(Sex == 1, "female", "male") %>% as_factor()) %>% 
+  ggplot(aes(x=Age)) + 
+  geom_histogram(color="black",fill="gray80",binwidth=1) + 
+  labs(x="Age",y="Number of samples") + 
+  scale_y_continuous(expand=c(0,0),limits = c(0,1500)) + 
+  facet_wrap(~ Sex) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16),
+        legend.position=c(0.85,0.9),legend.title=element_blank(),legend.title.align=1,
+        legend.text=element_text(size=16),
+        legend.background=element_rect(fill=NA,color=NA),legend.box.background=element_rect(color="black")) 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Age&Sex_commu.png"),width=24,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Age&Sex_commu.pdf"),device=cairo_pdf,width=24,height=22,units="cm")
+
+dtCommu %>% 
+  group_by(Sex) %>% summarise(n = n())
+
+#BirThree
+dtBirThree <- read_rds(str_c(PROJECT_DIR,"/input/",tPheno,".rds")) %>% inner_join(
+  bind_rows(
+    read_delim(str_c(PROJECT_DIR,"/tmp/QC0_2.fam"), delim = " ", col_names = F),
+    read_delim(str_c(PROJECT_DIR,"/tmp/QC0_3.fam"), delim = " ", col_names = F)) %>% 
+    rename(igid = X1) %>% distinct(igid) %>% left_join(
+      bind_rows(
+        read_csv(file='path/to/ID_conversion_list_of_JPA_2.csv') %>% select(TMMID=tmmid,igid), 
+        read_csv(file='path/to/ID_conversion_list_of_JPA_NEO.csv') %>% select(TMMID=tmmid,igid)) %>% 
+        distinct(TMMID, .keep_all = T), by = "igid"),
+  by = "TMMID") %>% 
+  filter(igid %in% (read_tsv(str_c(PROJECT_DIR,"/tmp/BirThree_igid.tsv"), col_names = F) %>% drop_na("X1") %>% pluck("X1"))) %>% 
+  inner_join(
+    read_csv('path/to/demographic_data.csv') %>% select(TMMID=1,Sex=性別,Birth=生年月) %>% 
+      mutate(Sex=case_when(Sex=="男性"~2,Sex=="女性"~1,TRUE~-9),Birth=Birth %>% lubridate::ym()) %>% filter(Birth>"1900-01-01")
+    ,by="TMMID") %>% 
+  mutate(Date = lubridate::ymd(Date)) %>% 
+  mutate(Age=(lubridate::interval(Birth,Date)/lubridate::years(1))) %>% filter(Sex != -9) %>% 
+  arrange(desc(Date)) %>% distinct(TMMID,.keep_all=TRUE)
+
+dtBirThree %>% mutate(Sex = if_else(Sex == 1, "female", "male") %>% as_factor()) %>%   ggplot(aes(x=Age)) + 
+  geom_histogram(color="black",fill="gray80",binwidth=1) + 
+  labs(x="Age",y="Number of samples") + 
+  scale_y_continuous(expand=c(0,0),limits = c(0,1500)) + 
+  facet_wrap(~ Sex) + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        axis.title=element_text(size=18),axis.text=element_text(size=16),
+        legend.position=c(0.85,0.9),legend.title=element_blank(),legend.title.align=1,
+        legend.text=element_text(size=16),
+        legend.background=element_rect(fill=NA,color=NA),legend.box.background=element_rect(color="black")) 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Age&Sex_BirThree.png"),width=24,height=22,dpi=600,units="cm") 
+ggsave(str_c(PROJECT_DIR,"/output/figs/Age&Sex_BirThree.pdf"),device=cairo_pdf,width=24,height=22,units="cm")
+
+dtBirThree %>% 
+  group_by(Sex) %>% summarise(n = n())
+
+####Volcano_plot_of_effect_sizes_(beta)_and_P-values
+dtEffect <- read_tsv(str_c(PROJECT_DIR,"/output/META_",tPheno,"_all.tsv")) %>% 
+  select(SNV=MarkerName,CHR,BP,Freq1,Effect,P) %>% mutate(Effect=if_else(Freq1 > 0.5,-Effect,Effect))
+
+dtEffect %>% arrange(P)
+
+#peak_range
+#Baso:127483156-129672118
+#Eosi:128196500-128959064
+
+dtEffect %>% mutate(Lesion=case_when(CHR==3 & BP >= 125800000 & BP <= 129200000 & P < 5*10^-8~"chr3 q21.3",TRUE~"other regions") %>% 
+                      factor(levels = c("chr3 q21.3","other regions"))) %>% 
+  mutate(BETA=Effect) %>% 
+  mutate(P=-log10(P)) %>% arrange(desc(Lesion)) %>% 
+  ggplot(aes(x=BETA,y=P,color=Lesion)) + 
+  geom_point(size=1) + 
+  geom_hline(yintercept = -log10(5*10^-8),color="darkblue",linetype=1,size=0.5) + 
+  scale_color_manual(values = c("darkred","gray70")) + 
+  labs(x="BETA of minor allele",y=expression(paste(-log[10]," (",italic("p"),")")),
+       color="Significant SNVs in ") +
+  scale_y_continuous(expand=c(0,0),limits = c(0,300)) + #Baso
+  # scale_y_continuous(expand=c(0,0),limits = c(0,100)) + #Eosi
+  theme_classic() + 
+  theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank(),panel.background=element_blank(),
+        axis.title =element_text(size=24),axis.text=element_text(size=22,color="black"),
+        axis.line=element_line(color="black"),axis.ticks=element_line(color="black"),
+        legend.position = "none")
+ggsave(str_c(PROJECT_DIR,"/output/figs/Effect_P_",tPheno,".png"),dpi=600,width=22,height=22,units="cm")
+ggsave(str_c(PROJECT_DIR,"/output/figs/Effect_P_",tPheno,".pdf"),width=22,height=22,units="cm",device=cairo_pdf)
